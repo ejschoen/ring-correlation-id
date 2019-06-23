@@ -6,6 +6,7 @@
   :dependencies []
   :profiles {:dev {:dependencies [[org.clojure/clojure "1.8.0"]
                                   [ring "1.6.3"]
+                                  [com.taoensso/timbre "4.0.2"]
                                   [clj-http "3.7.0"]
                                   [clj-http-fake "1.0.3"]]}}
   )
