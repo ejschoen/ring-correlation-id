@@ -8,6 +8,8 @@ A Ring-compatible Clojure library for correlation id middleware, to aid in traci
 (use '[ring.middleware.correlation-id :as r-id])
 
 ;; For Ring: ensures a :correlation-id header, and binds ring.middleware.correlation-id/*correlation-id*
+;; Sets Timbre *context* to {:correlation-id *correlation-id*}, so that the correlation id is natively
+;; accessible to appenders
 (def app
   (-> handler
       r-id/wrap-correlation-id))
