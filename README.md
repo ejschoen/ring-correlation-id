@@ -13,8 +13,8 @@ A Ring-compatible Clojure library for correlation id middleware, to aid in traci
 
 ;; For Ring: r-id/wrap-correlation-id ensures a :correlation-id header, and binds 
 ;; ring.middleware.correlation-id/*correlation-id*.
-;; Also sets Timbre *context* to {:correlation-id *correlation-id*}, so that the correlation id is natively
-;; accessible to appenders
+;; Also sets Timbre *context* to {:correlation-id *correlation-id*}, 
+;; so that the correlation id is natively accessible to appenders.
 ;; c-id/ring-wrap-correlation-id adds additional middleware to clj-http, to inject
 ;; *correlation-id* into the request headers.
 
