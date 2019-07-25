@@ -26,7 +26,8 @@
        (client req
                #(respond (assoc-in req [:headers ring-correlation-id/id-header]
                                    correlation-id)
-                         raise))))))
+                         raise)
+               raise)))))
 
 (defmacro with-correlation-id
   [& body]
