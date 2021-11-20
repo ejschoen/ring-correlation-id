@@ -23,11 +23,9 @@
                               (let [new-id (str (UUID/randomUUID))]
                                 (timbre/debugf "CLJ-HTTP MIDDLEWARE: New Correlation ID %s" new-id)
                                 new-id))]
-       (client req
-               #(respond (assoc-in req [:headers ring-correlation-id/id-header]
-                                   correlation-id)
-                         raise)
-               raise)))))
+       (client (assoc-in req [:headers ring-correlation-id/id-header]
+                         correlation-id)
+               respond raise)))))
 
 (defmacro with-correlation-id
   [& body]

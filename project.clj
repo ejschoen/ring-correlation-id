@@ -1,4 +1,4 @@
-(defproject org.clojars.ejschoen/ring-correlation-id "0.4.1"
+(defproject org.clojars.ejschoen/ring-correlation-id "0.5.0"
   :description "Correlation ID tracing for distributed systems using ring and clj-http"
   :url "https://github.com/ejschoen/ring-correlation-id.git"
   :license {:name "Eclipse Public License"
@@ -7,6 +7,8 @@
   :profiles {:dev {:dependencies [[org.clojure/clojure "1.8.0"]
                                   [ring "1.6.3"]
                                   [com.taoensso/timbre "4.10.0"]
-                                  [clj-http "3.7.0"]
-                                  [clj-http-fake "1.0.3"]]}}
-  )
+                                  [clj-http "3.10.0"]
+                                  [clj-http-fake "1.0.3"]
+                                  [clj-telemetry "0.3.0-SNAPSHOT" ]
+                                  [cheshire "5.9.0"]
+                                  ]}})
