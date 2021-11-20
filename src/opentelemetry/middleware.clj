@@ -6,9 +6,12 @@
   (:require [opentelemetry.w3c-trace-context])
   (:require [clj-http.client :as http])
   (:require [telemetry.tracing :as tracing])
-  (:import [io.opentelemetry.sdk OpenTelemetrySdk OpenTelemetrySdkBuilder])
+  (:import [io.opentelemetry.sdk OpenTelemetrySdk OpenTelemetrySdkBuilder]
+           [io.opentelemetry.sdk.resources Resource]
+           [io.opentelemetry.sdk.trace SpanProcessor SdkTracerProvider])
   (:import [io.opentelemetry.api OpenTelemetry GlobalOpenTelemetry]
            [io.opentelemetry.api.baggage.propagation W3CBaggagePropagator]
+           [io.opentelemetry.api.common Attributes AttributesBuilder]
            [io.opentelemetry.api.trace
             SpanBuilder SpanContext SpanKind Span
             Tracer TraceState TraceStateBuilder]
@@ -16,6 +19,7 @@
   (:import [io.opentelemetry.context Context Scope]
            [io.opentelemetry.context.propagation ContextPropagators
             TextMapPropagator TextMapGetter TextMapSetter ])
+  
   )
 
 (def ^:private _ot (atom nil))
@@ -31,21 +35,56 @@
              old)))
   @_ot)
 
-(defn create-open-telemetry! []
+(defn- get-default-propagators
+  []
+  (ContextPropagators/create
+   (TextMapPropagator/composite
+    [(W3CTraceContextPropagator/getInstance)
+     (W3CBaggagePropagator/getInstance)])))
+
+(defn- ^Attributes build-attributes
+  [m]
+  (let [^AttributesBuilder builder (Attributes/builder)]
+    (doseq [[key val] m]
+      (.put builder key val))
+    (.build builder)))
+
+(defn create-open-telemetry!
   "If the open telemetry instance for this process is not already set,
-   create one and registery it as global."
-  (swap! _ot
-         (fn [old]
-           (if (not old)
-             (let [propagators (ContextPropagators/create
-                                (TextMapPropagator/composite
-                                 [(W3CTraceContextPropagator/getInstance)
-                                  (W3CBaggagePropagator/getInstance)]))
-                   ot (.buildAndRegisterGlobal (doto (OpenTelemetrySdk/builder)
-                                                 (.setPropagators propagators)))]
-               ot)
-             old)))
-  @_ot)
+   create one and registery it as global.
+   Supported entries in optional map parameter:
+     propagators: opentelemetry.api.trace.propagation trace context propagator
+                  (defaults to value from get-default-propagators)
+     span-processor: opentelemetry.sdk.trace.SpanProcessor instance
+     tracer-provider: opentelemetry.sdk.trace.SdkTracerProvider instance
+     tracer-attributes: Map of attributes to attached to a tracer when span-processor is provided."
+  ([{:keys [propagators span-processor tracer-provider
+            tracer-attributes]
+     :or {propagators (get-default-propagators)}}]
+   (when (and span-processor tracer-provider)
+     (throw (Exception. "create-open-telemetry!: Optionally provide span-processor or tracer-provider, but not both.")))
+   (swap! _ot
+          (fn [old]
+            (if (not old)
+              (let [ot (.buildAndRegisterGlobal
+                        (doto (OpenTelemetrySdk/builder)
+                          (cond-> propagators
+                            (.setPropagators propagators))
+                          (cond-> tracer-provider
+                            (.setTracerProvider tracer-provider))
+                          (cond-> (or span-processor tracer-attributes)
+                            (.setTracerProvider
+                             (.build
+                              (doto (SdkTracerProvider/builder)
+                                (cond-> tracer-attributes
+                                  (.setResource (.merge (.getDefault Resource)
+                                                        (build-attributes tracer-attributes))))
+                                (cond-> span-processor (.addSpanProcessor span-processor))))))))]
+                ot)
+              old)))
+   @_ot)
+  ([]
+   (create-open-telemetry! {})))
 
 (defn ^OpenTelemetry get-open-telemetry []
   "Get the open telemetry instance for this process.  If one is not registered,
