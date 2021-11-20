@@ -81,25 +81,29 @@
       nil)))
 
 (defn ring-wrap-telemetry-span
-  [handler]
-  (fn [req]
-    (debugf "In ring-wrap-telemetry-span")
-    (if-let [^OpenTelemetry ot (get-open-telemetry)]
-      (let [^TextMapPropagator propagator (.getTextMapPropagator
-                                           (or (.getPropagators ot)
-                                               (ContextPropagators/noop)))
-            ^Context new-context (.extract propagator (Context/current) req
-                                           (reify TextMapGetter
-                                             (get [_ obj key]
-                                               (get (:headers obj) key))))
-            ^Span span (.startSpan
-                        (doto (.spanBuilder (get-tracer) (:uri req))
-                          (.setParent new-context)
-                          (.setSpanKind SpanKind/SERVER)))]
-        (try (.makeCurrent span)
-             (handler req)
-             (finally (.end span))))
-      (handler req))))
+  ([handler]
+   (ring-wrap-telemetry-span handler {}))
+  ([handler {:keys [span-name]}]
+   (fn [req]
+     (debugf "In ring-wrap-telemetry-span")
+     (if-let [^OpenTelemetry ot (get-open-telemetry)]
+       (let [^TextMapPropagator propagator (.getTextMapPropagator
+                                            (or (.getPropagators ot)
+                                                (ContextPropagators/noop)))
+             ^Context new-context (.extract propagator (Context/current) req
+                                            (reify TextMapGetter
+                                              (get [_ obj key]
+                                                (get (:headers obj) key))))
+             ^Span span (.startSpan
+                         (doto (.spanBuilder (get-tracer)
+                                             (or (not-empty span-name)
+                                                 (:uri req)))
+                           (.setParent new-context)
+                           (.setSpanKind SpanKind/SERVER)))]
+         (try (.makeCurrent span)
+              (handler req)
+              (finally (.end span))))
+       (handler req)))))
 
 (defn inject-trace-headers
   [req]
@@ -135,15 +139,18 @@
 
 (defn timbre-wrap-telemetry-span
   [data]
-  (update-in data [:correlation-id] #(or %
-                                         (.getSpanId (.getSpanContext (Context/current))))))
+  (update-in data [:correlation-id]
+             #(or % (.getSpanId (.getSpanContext (Span/current))))))
 
-(def ^:private delta-config
+(def delta-config
    {:output-fn tcid/output-fn
     :middleware [#'timbre-wrap-telemetry-span]})
 
 (defmacro timbre-with-telemetry-span-middleware
   [& body]
-  `(with-merged-config
-     delta-config
-     ~@body))
+  (if (map? (first body))
+    `(with-merged-config (merge delta-config ~(first body))
+       ~@(rest body))
+    `(with-merged-config
+       delta-config
+       ~@body)))

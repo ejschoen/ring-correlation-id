@@ -6,6 +6,7 @@
   (:use [opentelemetry.middleware])
   (:use [opentelemetry.w3c-trace-context])
   (:use [clj-http.fake])
+  (:require [timbre.middleware.correlation-id :as tcid])
   (:import [io.opentelemetry.context Context]
            [io.opentelemetry.context.propagation ContextPropagators
             TextMapPropagator TextMapGetter TextMapSetter ]
@@ -35,16 +36,39 @@
        (c/get "http://test.com")))))
                                          
   
+(defn- output-fn-wrapper
+  ([data] (output-fn-wrapper nil data))
+  ([opts data]
+   (is (= (:correlation-id data)
+          (.getSpanId (.getSpanContext (Span/current)))))
+   (tcid/output-fn opts data)))
+
 (deftest test-ring-telemetry-middleware
-  (let [handler (fn [req]
-                  (debug (Span/current))
-                  (is (= "2149c7c507824641b6bd38e8fe548bed"
-                         (.getTraceId (.getSpanContext (Span/current)))))
-                  (is (= "7c34f6f8ab7c5691"
-                         (.getSpanId (.getParentSpanContext (Span/current)))))
-                  (is (.isSampled (.getSpanContext (Span/current))))
-                  (is (.isValid (.getSpanContext (Span/current))))
-                  {:status 200 :body "Hello"})
-        resp ((ring-wrap-telemetry-span handler)
-              {:headers {"traceparent" "00-2149c7c507824641b6bd38e8fe548bed-7c34f6f8ab7c5691-01"}})]
-  ))
+  (testing "creates top level context"
+    (let [handler (fn [req]
+                    (timbre-with-telemetry-span-middleware {:output-fn output-fn-wrapper}
+                     (is (.getTraceId (.getSpanContext (Span/current))))
+                     (is (.getParentSpanContext (Span/current)))
+                     (is (= "00000000000000000000000000000000"
+                            (.getTraceId (.getParentSpanContext (Span/current)))))
+                     (is (.isSampled (.getSpanContext (Span/current))))
+                     (is (.isValid (.getSpanContext (Span/current))))
+                     (info "**** Hello world")
+                     {:status 200 :body "Hello"}))
+          resp ((ring-wrap-telemetry-span handler)
+                {:headers {}})]
+      ))
+  (testing "creates child context from parent in headers"
+    (let [handler (fn [req]
+                    (timbre-with-telemetry-span-middleware {:output-fn output-fn-wrapper}
+                     (is (= "2149c7c507824641b6bd38e8fe548bed"
+                            (.getTraceId (.getSpanContext (Span/current)))))
+                     (is (= "7c34f6f8ab7c5691"
+                            (.getSpanId (.getParentSpanContext (Span/current)))))
+                     (is (.isSampled (.getSpanContext (Span/current))))
+                     (is (.isValid (.getSpanContext (Span/current))))
+                     (info "**** Hello world")
+                     {:status 200 :body "Hello"}))
+          resp ((ring-wrap-telemetry-span handler)
+                {:headers {"traceparent" "00-2149c7c507824641b6bd38e8fe548bed-7c34f6f8ab7c5691-01"}})]
+      )))
