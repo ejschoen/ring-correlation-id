@@ -4,6 +4,8 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies []
+  :plugins [[lein-eftest "0.5.9"]]
+  :eftest {:multithread? false}
   :profiles {:dev {:dependencies [[org.clojure/clojure "1.8.0"]
                                   [ring "1.6.3"]
                                   [com.taoensso/timbre "4.10.0"]

@@ -13,7 +13,7 @@
             SpanBuilder SpanContext SpanKind Span
             Tracer TraceState TraceStateBuilder]
            [io.opentelemetry.api.trace.propagation W3CTraceContextPropagator])
-  (:import [io.opentelemetry.context Context]
+  (:import [io.opentelemetry.context Context Scope]
            [io.opentelemetry.context.propagation ContextPropagators
             TextMapPropagator TextMapGetter TextMapSetter ])
   )
@@ -21,7 +21,9 @@
 (def ^:private _ot (atom nil))
 (def ^:private _tracer (atom nil))
 
-(defn set-open-telemetry! [ot]
+(defn set-open-telemetry!
+  "Set the open telemetry instance for this process, unless already set."
+  [ot]
   (swap! _ot
          (fn [old]
            (if (not old)
@@ -30,6 +32,8 @@
   @_ot)
 
 (defn create-open-telemetry! []
+  "If the open telemetry instance for this process is not already set,
+   create one and registery it as global."
   (swap! _ot
          (fn [old]
            (if (not old)
@@ -44,36 +48,44 @@
   @_ot)
 
 (defn ^OpenTelemetry get-open-telemetry []
+  "Get the open telemetry instance for this process.  If one is not registered,
+   return the noop instance."
   (or @_ot (OpenTelemetry/noop)))
 
 (defn get-tracer [& [name]]
+  "Get the tracer for this process.  If a tracer is not set, create one,
+   optionally with the given name."
   (when (not @_tracer)
-    (debugf "Building a new tracer with name %s" name)
+    ;;(debugf "Building a new tracer with name %s" name)
     (reset! _tracer (.build (.tracerBuilder (get-open-telemetry)
                                             (or name
                                                 "org.ejschoen.opentelemetry.middleware")))))
   @_tracer)
 
 (defn set-tracer! [tracer]
+  "Set the tracer for this process, if not already set."
   (when (not @_tracer)
     (reset! _tracer tracer))
   @_tracer)
 
 (defn reset-open-telemetry! []
+  "Reset open telemetry in this process. This is for testing purposes only."
   (GlobalOpenTelemetry/resetForTest)
   (reset! _ot nil)
   (reset! _tracer nil))
 
 (defmacro with-span
+  "Execute body within the context of an open telemetry span,"
   [name & body]
   `(let [span# (tracing/create-span (get-tracer) ~name)]
      (try
-       (with-open [scope# (.makeCurrent span#)]
+       (with-open [^Scope scope# (.makeCurrent span#)]
          ~@body
          )
        (finally (tracing/end-span span#)))))
 
 (defn get-context-header [req]
+  "Return the W3C trace context headers as a 2-tuple list of traceparent and tracestate."
   (let [traceparent (get-in req [:headers "traceparent"])
         tracestate (get-in req [:headers "tracestate"])]
     (if traceparent
@@ -81,12 +93,15 @@
       nil)))
 
 (defn ring-wrap-telemetry-span
+  "Ring handler that creates a span for the dynamic extent of the wrapped
+   handler, with a parent context when the incoming request has the appropriate
+   W3C trace context headers."
   ([handler]
    (ring-wrap-telemetry-span handler {}))
   ([handler {:keys [span-name]}]
    (fn [req]
      (debugf "In ring-wrap-telemetry-span")
-     (if-let [^OpenTelemetry ot (get-open-telemetry)]
+     (if-let [^OpenTelemetry ot @_ot]
        (let [^TextMapPropagator propagator (.getTextMapPropagator
                                             (or (.getPropagators ot)
                                                 (ContextPropagators/noop)))
@@ -100,35 +115,39 @@
                                                  (:uri req)))
                            (.setParent new-context)
                            (.setSpanKind SpanKind/SERVER)))]
-         (try (.makeCurrent span)
-              (handler req)
+         (try (with-open [^Scope scope (.makeCurrent span)]
+                (handler req))
               (finally (.end span))))
        (handler req)))))
 
 (defn inject-trace-headers
+  "Inject W3C trace headers into a request map, 
+   based on the current open telemetry span context."
   [req]
   (if-let [^OpenTelemetry ot (get-open-telemetry)]
-    (let [^TextMapPropagator propagator (.getTextMapPropagator
-                                         (.getPropagators ot))
-          atom-map (atom {})]
-      (debug propagator)
-      (debug (Context/current))
-      (.inject propagator (Context/current) atom-map
-               (reify TextMapSetter
-                 (set [_ m key value]
-                   (swap! m assoc key value))))
-      (debug @atom-map)
-      (update-in req [:headers] (fn [h] (merge h @atom-map))))
+    (if (.isValid (.getSpanContext (Span/current)))
+      (let [^TextMapPropagator propagator (.getTextMapPropagator
+                                           (.getPropagators ot))
+            atom-map (atom {})]
+        ;;(debug propagator)
+        ;;(debug (Context/current))
+        (.inject propagator (Context/current) atom-map
+                 (reify TextMapSetter
+                   (set [_ m key value]
+                     (swap! m assoc key value))))
+        ;;(debug @atom-map)
+        (update-in req [:headers] (fn [h] (merge h @atom-map))))
+      req)
     req))
 
 (defn clj-http-wrap-telemetry-span
   [client]
   (fn
     ([req]
-     (debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
+     ;;(debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
      (client (inject-trace-headers req)))
     ([req respond raise]
-     (debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
+     ;;(debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
      (client (inject-trace-headers req)
              respond raise))))
 

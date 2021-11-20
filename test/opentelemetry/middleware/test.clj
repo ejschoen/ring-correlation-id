@@ -19,21 +19,33 @@
                            (finally (reset-open-telemetry!)))))
 
 (deftest test-clj-http-telemetry-middleware
-  (with-span "test-span"
+  (testing "with no span context"
     (with-global-fake-routes-in-isolation
       {"http://test.com" (fn [req]
-                           (pprint/pprint req)
+                           ;;(pprint/pprint req)
                            (let [traceparent (parse-traceparent (get-in req [:headers "traceparent"]))]
-                             (is (= "00" (:version traceparent)))
-                             (is (:trace-id traceparent))
-                             (is (not= (:trace-id traceparent) "00000000000000000000000000000000"))
-                             (is (:parent-id traceparent))
-                             (is (not= (:parent-id traceparent) "0000000000000000"))
-                             (is (:sampled? traceparent)))
+                             (is (nil? traceparent)))
                            {:status 200
                             :body "Hello"})}
       (clj-http-with-telemetry-span-middleware
-       (c/get "http://test.com")))))
+       (is (not (.isValid (.getSpanContext (Span/current)))))
+       (c/get "http://test.com"))))
+  (testing "with active span context"
+    (with-span "test-span"
+      (with-global-fake-routes-in-isolation
+        {"http://test.com" (fn [req]
+                             ;;(pprint/pprint req)
+                             (let [traceparent (parse-traceparent (get-in req [:headers "traceparent"]))]
+                               (is (= "00" (:version traceparent)))
+                               (is (:trace-id traceparent))
+                               (is (not= (:trace-id traceparent) "00000000000000000000000000000000"))
+                               (is (:parent-id traceparent))
+                               (is (not= (:parent-id traceparent) "0000000000000000"))
+                               (is (:sampled? traceparent)))
+                             {:status 200
+                              :body "Hello"})}
+        (clj-http-with-telemetry-span-middleware
+         (c/get "http://test.com"))))))
                                          
   
 (defn- output-fn-wrapper
