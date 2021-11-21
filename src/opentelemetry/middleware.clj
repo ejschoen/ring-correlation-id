@@ -207,6 +207,13 @@
   `(http/with-additional-middleware [#'clj-http-wrap-telemetry-span]
      ~@body))
 
+(defn record-exception
+  ([e escaped?]
+   (when (.isValid (.getSpanContext (Span/current)))
+     (record-exception (Span/current) e escaped?)))
+  ([span e escaped?]
+   (.recordException span e (Attributes/of "exception.escaped" escaped?))))
+
 (defn ring-wrap-telemetry-span
   "Ring handler that creates a span for the dynamic extent of the wrapped
    handler, with a parent context when the incoming request has the appropriate
@@ -233,6 +240,9 @@
          (try (with-open [^Scope scope (.makeCurrent span)]
                 (clj-http-with-telemetry-span-middleware
                  (handler req)))
+              (catch Throwable e
+                (record-exception span e true)
+                (throw e))
               (finally (.end span))))
        (handler req)))))
 
