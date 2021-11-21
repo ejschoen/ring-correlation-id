@@ -13,7 +13,7 @@
            [io.opentelemetry.api.trace Span]))
 
 (use-fixtures :each (fn [f]
-                      (create-open-telemetry! {:name "middleware.test" :global {:sampler "on" :attributes {"service.name" "i2kconnect"}}})
+                      (create-open-telemetry! {:sampler "on" :tracer-attributes {"service.name" "i2kconnect"}})
                       (set-tracer! (get-tracer "test.tracing"))
                       (try (f)
                            (finally (reset-open-telemetry!)))))

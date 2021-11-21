@@ -47,15 +47,15 @@
 (def ^:private attribute-cache (cache-wrapped/lru-cache-factory {} :threshold 32))
 
 (def ^:private attribute-creators
-  {String #(AttributeKey/stringKey %1)
-   Long #(AttributeKey/longKey %1)
-   Double #(AttributeKey/doubleKey %1)
-   Boolean #(AttributeKey/booleanKey %1)})
+  {String (fn [name] (AttributeKey/stringKey name))
+   Long (fn [name]  (AttributeKey/longKey name))
+   Double (fn [name]  (AttributeKey/doubleKey name))
+   Boolean (fn [name] (AttributeKey/booleanKey name))})
 
 
 (defn ^AttributeKey get-attribute-key [name value]
   (if-let [creator  (get attribute-creators (type value))]
-    (cache-wrapped/lookup-or-miss attribute-cache creator)
+    (cache-wrapped/lookup-or-miss attribute-cache name creator)
     nil))
                                 
 (defn- ^Attributes build-attributes
@@ -91,7 +91,8 @@
      tracer-attributes: Map of attributes to attached to a tracer when span-processor is provided."
   ([{:keys [propagators span-processor tracer-provider sampler
             tracer-attributes]
-     :or {propagators (get-default-propagators)}}]
+     :or {propagators (get-default-propagators)}
+     :as opts}]print
    (when (and span-processor tracer-provider)
      (throw (Exception. "create-open-telemetry!: Optionally provide span-processor or tracer-provider, but not both.")))
    (swap! _ot
