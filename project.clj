@@ -7,6 +7,7 @@
   :plugins [[lein-eftest "0.5.9"]]
   :eftest {:multithread? false}
   :profiles {:dev {:dependencies [[org.clojure/clojure "1.8.0"]
+                                  [org.clojure/core.cache "1.0.207"]
                                   [ring "1.6.3"]
                                   [com.taoensso/timbre "4.10.0"]
                                   [clj-http "3.10.0"]

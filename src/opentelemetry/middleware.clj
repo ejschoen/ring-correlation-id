@@ -1,4 +1,5 @@
 (ns opentelemetry.middleware
+  (:require [clojure.core.cache.wrapped :as cache-wrapped])
   (:require [ring.middleware.correlation-id :as rcid]
             [clj-http.middleware.correlation-id :as hcid]
             [timbre.middleware.correlation-id :as tcid])
@@ -12,7 +13,7 @@
            [io.opentelemetry.sdk.trace.samplers Sampler])
   (:import [io.opentelemetry.api OpenTelemetry GlobalOpenTelemetry]
            [io.opentelemetry.api.baggage.propagation W3CBaggagePropagator]
-           [io.opentelemetry.api.common Attributes AttributesBuilder]
+           [io.opentelemetry.api.common Attributes AttributesBuilder AttributeKey]
            [io.opentelemetry.api.trace
             SpanBuilder SpanContext SpanKind Span
             Tracer TraceState TraceStateBuilder]
@@ -43,11 +44,28 @@
     [(W3CTraceContextPropagator/getInstance)
      (W3CBaggagePropagator/getInstance)])))
 
+(def ^:private attribute-cache (cache-wrapped/lru-cache-factory {} :threshold 32))
+
+(def ^:private attribute-creators
+  {String #(AttributeKey/stringKey %1)
+   Long #(AttributeKey/longKey %1)
+   Double #(AttributeKey/doubleKey %1)
+   Boolean #(AttributeKey/booleanKey %1)})
+
+
+(defn ^AttributeKey get-attribute-key [name value]
+  (if-let [creator  (get attribute-creators (type value))]
+    (cache-wrapped/lookup-or-miss attribute-cache creator)
+    nil))
+                                
 (defn- ^Attributes build-attributes
   [m]
   (let [^AttributesBuilder builder (Attributes/builder)]
-    (doseq [[key val] m]
-      (.put builder key val))
+    (doseq [[key val] m
+            :let [^AttributeKey attrkey (get-attribute-key key val)]]
+      (if attrkey
+        (.put builder attrkey val)
+        (.put builder key val)))
     (.build builder)))
 
 (defn create-open-telemetry!
