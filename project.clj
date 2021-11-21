@@ -11,6 +11,6 @@
                                   [com.taoensso/timbre "4.10.0"]
                                   [clj-http "3.10.0"]
                                   [clj-http-fake "1.0.3"]
-                                  [clj-telemetry "0.3.0-SNAPSHOT" ]
+                                  [org.clojars.ejschoen/clj-telemetry "0.3.0-SNAPSHOT" ]
                                   [cheshire "5.9.0"]
                                   ]}})
