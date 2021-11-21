@@ -8,7 +8,7 @@
   (:require [clj-http.client :as http])
   (:require [telemetry.tracing :as tracing])
   (:import [io.opentelemetry.sdk OpenTelemetrySdk OpenTelemetrySdkBuilder]
-           [io.opentelemetry.sdk.resources Resource]
+           [io.opentelemetry.sdk.resources Resource ResourceBuilder]
            [io.opentelemetry.sdk.trace SpanProcessor SdkTracerProvider]
            [io.opentelemetry.sdk.trace.samplers Sampler])
   (:import [io.opentelemetry.api OpenTelemetry GlobalOpenTelemetry]
@@ -59,8 +59,20 @@
     nil))
                                 
 (defn- ^Attributes build-attributes
+  "Build an Attributes object from a map of key/value pairs."
   [m]
   (let [^AttributesBuilder builder (Attributes/builder)]
+    (doseq [[key val] m
+            :let [^AttributeKey attrkey (get-attribute-key (name key) val)]]
+      (if attrkey
+        (.put builder attrkey val)
+        (.put builder (name key) val)))
+    (.build builder)))
+
+(defn- ^Resource build-resource
+  "Build a Resource object from a map of key/value pairs."
+  [m]
+  (let [^ResourceBuilder builder (Resource/builder)]
     (doseq [[key val] m
             :let [^AttributeKey attrkey (get-attribute-key (name key) val)]]
       (if attrkey
@@ -96,8 +108,8 @@
                              (.build
                               (doto (SdkTracerProvider/builder)
                                 (cond-> tracer-attributes
-                                  (.setResource (.merge (.getDefault Resource)
-                                                        (build-attributes tracer-attributes))))
+                                  (.setResource (.merge (Resource/getDefault)
+                                                        (build-resource tracer-attributes))))
                                 (cond-> sampler (.setSampler
                                                  (cond 
                                                    (= sampler "on") (Sampler/alwaysOn)
