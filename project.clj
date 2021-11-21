@@ -9,6 +9,7 @@
   :profiles {:dev {:dependencies [[org.clojure/clojure "1.8.0"]
                                   [org.clojure/core.cache "1.0.207"]
                                   [ring "1.6.3"]
+                                  [com.taoensso/encore "2.126.2"]
                                   [com.taoensso/timbre "4.10.0"]
                                   [clj-http "3.10.0"]
                                   [clj-http-fake "1.0.3"]

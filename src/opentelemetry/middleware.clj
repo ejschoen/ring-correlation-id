@@ -1,9 +1,11 @@
 (ns opentelemetry.middleware
-  (:require [clojure.core.cache.wrapped :as cache-wrapped])
+  (:require [clojure.core.cache.wrapped :as cache-wrapped]
+            [clojure.string :as str])
   (:require [ring.middleware.correlation-id :as rcid]
             [clj-http.middleware.correlation-id :as hcid]
             [timbre.middleware.correlation-id :as tcid])
-  (:require [taoensso.timbre :refer [errorf warnf debug debugf with-merged-config]])
+  (:require [taoensso.encore :as enc]
+            [taoensso.timbre :refer [errorf warnf debug debugf with-merged-config stacktrace]])
   (:require [opentelemetry.w3c-trace-context])
   (:require [clj-http.client :as http])
   (:require [telemetry.tracing :as tracing])
@@ -236,12 +238,32 @@
 
 (defn timbre-wrap-telemetry-span
   [data]
-  (update-in data [:correlation-id]
-             #(let [context (.getSpanContext (Span/current))]
-                (or %  (str (.getTraceId context) "-" (.getSpanId context))))))
+  (let [context (.getSpanContext (Span/current))]
+    (assoc data :trace-id (.getTraceId context) :span-id (.getSpanId context) :trace-flags (.asHex (.getTraceFlags context)))))
+
+(defn timbre-output-fn
+  "Default (fn [data]) -> string output fn.
+  Use`(partial default-output-fn <opts-map>)` to modify default opts."
+  ([     data] (timbre-output-fn nil data))
+  ([opts data] ; For partials
+   (let [{:keys [no-stacktrace? stacktrace-fonts]} opts
+         {:keys [level ?err #_vargs msg_ ?ns-str ?file hostname_
+                 timestamp_ ?line trace-id span-id trace-flags]} data]
+     (str
+       (force timestamp_)
+       " traceID=" trace-id
+       " spanID=" span-id
+       " traceFlags=" trace-flags
+       " " (force hostname_) " "
+       (str/upper-case (name level))  " "
+       "[" (or ?ns-str ?file "?") ":" (or ?line "?") "] - "
+       (force msg_)
+       (when-not no-stacktrace?
+         (when-let [err ?err]
+           (str enc/system-newline (stacktrace err opts))))))))
 
 (def delta-config
-   {:output-fn tcid/output-fn
+   {:output-fn timbre-output-fn
     :middleware [#'timbre-wrap-telemetry-span]})
 
 (defmacro timbre-with-telemetry-span-middleware

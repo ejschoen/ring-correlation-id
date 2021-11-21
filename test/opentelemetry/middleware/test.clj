@@ -51,11 +51,10 @@
 (defn- output-fn-wrapper
   ([data] (output-fn-wrapper nil data))
   ([opts data]
-   (is (= (:correlation-id data)
-          (str (.getTraceId (.getSpanContext (Span/current)))
-               "-"
-               (.getSpanId (.getSpanContext (Span/current))))))
-   (tcid/output-fn opts data)))
+   (is (= (:trace-id data) (.getTraceId (.getSpanContext (Span/current)))))
+   (is (= (:span-id data) (.getSpanId (.getSpanContext (Span/current)))))
+   (is (= (:trace-flags data) (.asHex (.getTraceFlags (.getSpanContext (Span/current))))))
+   (timbre-output-fn opts data)))
 
 (deftest test-ring-telemetry-middleware
   (testing "creates top level context"
