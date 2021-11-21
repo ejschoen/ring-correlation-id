@@ -62,10 +62,10 @@
   [m]
   (let [^AttributesBuilder builder (Attributes/builder)]
     (doseq [[key val] m
-            :let [^AttributeKey attrkey (get-attribute-key key val)]]
+            :let [^AttributeKey attrkey (get-attribute-key (name key) val)]]
       (if attrkey
         (.put builder attrkey val)
-        (.put builder key val)))
+        (.put builder (name key) val)))
     (.build builder)))
 
 (defn create-open-telemetry!
