@@ -8,7 +8,8 @@
   (:require [telemetry.tracing :as tracing])
   (:import [io.opentelemetry.sdk OpenTelemetrySdk OpenTelemetrySdkBuilder]
            [io.opentelemetry.sdk.resources Resource]
-           [io.opentelemetry.sdk.trace SpanProcessor SdkTracerProvider])
+           [io.opentelemetry.sdk.trace SpanProcessor SdkTracerProvider]
+           [io.opentelemetry.sdk.trace.samplers Sampler])
   (:import [io.opentelemetry.api OpenTelemetry GlobalOpenTelemetry]
            [io.opentelemetry.api.baggage.propagation W3CBaggagePropagator]
            [io.opentelemetry.api.common Attributes AttributesBuilder]
@@ -58,7 +59,7 @@
      span-processor: opentelemetry.sdk.trace.SpanProcessor instance
      tracer-provider: opentelemetry.sdk.trace.SdkTracerProvider instance
      tracer-attributes: Map of attributes to attached to a tracer when span-processor is provided."
-  ([{:keys [propagators span-processor tracer-provider
+  ([{:keys [propagators span-processor tracer-provider sampler
             tracer-attributes]
      :or {propagators (get-default-propagators)}}]
    (when (and span-processor tracer-provider)
@@ -79,6 +80,13 @@
                                 (cond-> tracer-attributes
                                   (.setResource (.merge (.getDefault Resource)
                                                         (build-attributes tracer-attributes))))
+                                (cond-> sampler (.setSampler
+                                                 (cond 
+                                                   (= sampler "on") (Sampler/alwaysOn)
+                                                   (= sampler "off") (Sampler/alwaysOff)
+                                                   (and (float? sampler) (<= 0.0 sampler 1.0)) (Sampler/traceIdRatioBased sampler)
+                                                   (instance? Sampler sampler) sampler
+                                                   :else nil)))
                                 (cond-> span-processor (.addSpanProcessor span-processor))))))))]
                 ot)
               old)))
@@ -131,6 +139,41 @@
       (list traceparent tracestate)
       nil)))
 
+(defn inject-trace-headers
+  "Inject W3C trace headers into a request map, 
+   based on the current open telemetry span context."
+  [req]
+  (if-let [^OpenTelemetry ot (get-open-telemetry)]
+    (if (.isValid (.getSpanContext (Span/current)))
+      (let [^TextMapPropagator propagator (.getTextMapPropagator
+                                           (.getPropagators ot))
+            atom-map (atom {})]
+        ;;(debug propagator)
+        ;;(debug (Context/current))
+        (.inject propagator (Context/current) atom-map
+                 (reify TextMapSetter
+                   (set [_ m key value]
+                     (swap! m assoc key value))))
+        ;;(debug @atom-map)
+        (update-in req [:headers] (fn [h] (merge h @atom-map))))
+      req)
+    req))
+(defn clj-http-wrap-telemetry-span
+  [client]
+  (fn
+    ([req]
+     ;;(debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
+     (client (inject-trace-headers req)))
+    ([req respond raise]
+     ;;(debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
+     (client (inject-trace-headers req)
+             respond raise))))
+
+(defmacro clj-http-with-telemetry-span-middleware
+  [& body]
+  `(http/with-additional-middleware [#'clj-http-wrap-telemetry-span]
+     ~@body))
+
 (defn ring-wrap-telemetry-span
   "Ring handler that creates a span for the dynamic extent of the wrapped
    handler, with a parent context when the incoming request has the appropriate
@@ -155,50 +198,16 @@
                            (.setParent new-context)
                            (.setSpanKind SpanKind/SERVER)))]
          (try (with-open [^Scope scope (.makeCurrent span)]
-                (handler req))
+                (clj-http-with-telemetry-span-middleware
+                 (handler req)))
               (finally (.end span))))
        (handler req)))))
-
-(defn inject-trace-headers
-  "Inject W3C trace headers into a request map, 
-   based on the current open telemetry span context."
-  [req]
-  (if-let [^OpenTelemetry ot (get-open-telemetry)]
-    (if (.isValid (.getSpanContext (Span/current)))
-      (let [^TextMapPropagator propagator (.getTextMapPropagator
-                                           (.getPropagators ot))
-            atom-map (atom {})]
-        ;;(debug propagator)
-        ;;(debug (Context/current))
-        (.inject propagator (Context/current) atom-map
-                 (reify TextMapSetter
-                   (set [_ m key value]
-                     (swap! m assoc key value))))
-        ;;(debug @atom-map)
-        (update-in req [:headers] (fn [h] (merge h @atom-map))))
-      req)
-    req))
-
-(defn clj-http-wrap-telemetry-span
-  [client]
-  (fn
-    ([req]
-     ;;(debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
-     (client (inject-trace-headers req)))
-    ([req respond raise]
-     ;;(debugf "CLJ-HTTP TELEMETRY MIDDLEWARE: Called")
-     (client (inject-trace-headers req)
-             respond raise))))
-
-(defmacro clj-http-with-telemetry-span-middleware
-  [& body]
-  `(http/with-additional-middleware [#'clj-http-wrap-telemetry-span]
-     ~@body))
 
 (defn timbre-wrap-telemetry-span
   [data]
   (update-in data [:correlation-id]
-             #(or % (.getSpanId (.getSpanContext (Span/current))))))
+             #(let [context (.getSpanContext (Span/current))]
+                (or %  (str (.getTraceId context) "-" (.getSpanId context))))))
 
 (def delta-config
    {:output-fn tcid/output-fn

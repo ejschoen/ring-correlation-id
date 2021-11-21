@@ -52,7 +52,9 @@
   ([data] (output-fn-wrapper nil data))
   ([opts data]
    (is (= (:correlation-id data)
-          (.getSpanId (.getSpanContext (Span/current)))))
+          (str (.getTraceId (.getSpanContext (Span/current)))
+               "-"
+               (.getSpanId (.getSpanContext (Span/current))))))
    (tcid/output-fn opts data)))
 
 (deftest test-ring-telemetry-middleware
@@ -84,3 +86,32 @@
           resp ((ring-wrap-telemetry-span handler)
                 {:headers {"traceparent" "00-2149c7c507824641b6bd38e8fe548bed-7c34f6f8ab7c5691-01"}})]
       )))
+
+(deftest test-span-propagation
+  (testing "with active span context"
+    (with-span "test-span"
+      (let [spancontext (.getSpanContext (Span/current))]
+        (with-global-fake-routes-in-isolation
+          {"http://test.com" (ring-wrap-telemetry-span
+                              (fn [req]
+                                ;;(pprint/pprint req)
+                                (let [traceparent (parse-traceparent (get-in req [:headers "traceparent"]))]
+                                  (is (= "00" (:version traceparent)))
+                                  (is (:trace-id traceparent))
+                                  (is (= (:trace-id traceparent) (.getTraceId spancontext)))
+                                  (is (:parent-id traceparent))
+                                  (is (= (:parent-id traceparent) (.getSpanId spancontext)))
+                                  (is (:sampled? traceparent)))
+                                {:status 200
+                                 :body (:body (c/get "http://subtest.com"))}))
+           "http://subtest.com" (ring-wrap-telemetry-span
+                                 (fn [req]
+                                   (let [traceparent (parse-traceparent (get-in req [:headers "traceparent"]))]
+                                     (is (= (:trace-id traceparent) (.getTraceId spancontext)))
+                                     (is (not= (:parent-id traceparent) (.getSpanId spancontext)))
+                                     (is (not= (:parent-id traceparent) "0000000000000000")))
+                                   {:status 200
+                                    :body "Goodbye"}))
+           }
+          (clj-http-with-telemetry-span-middleware
+           (c/get "http://test.com")))))))
