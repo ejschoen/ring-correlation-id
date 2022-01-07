@@ -104,7 +104,7 @@
   ([{:keys [propagators span-processor tracer-provider sampler
             tracer-attributes]
      :or {propagators (get-default-propagators)}
-     :as opts}]print
+     :as opts}]
    (when (and span-processor tracer-provider)
      (throw (Exception. "create-open-telemetry!: Optionally provide span-processor or tracer-provider, but not both.")))
    (swap! _ot
