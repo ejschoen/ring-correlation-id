@@ -39,9 +39,19 @@
              old)))
   @_ot)
 
+;;Wow.  Calling static interface methods in Java 11 fails in Clojure 1.8
+;;https://stackoverflow.com/questions/49574394/how-to-instantiate-a-stream-builder-class-in-clojure-using-java-9
+(defmacro interface-static-call
+  [sym & argtypes]
+  `(let [m# (.getMethod ~(symbol (namespace sym))
+                        ~(name sym)
+                        (into-array Class ~(into [] argtypes)))]
+     (fn [& args#]
+       (.invoke m# nil (to-array args#)))))
+
 (defn- get-default-propagators
   []
-  (ContextPropagators/create
+  ((interface-static-call ContextPropagators/create io.opentelemetry.context.propagation.TextMapPropagator)
    (TextMapPropagator/composite
     [(W3CTraceContextPropagator/getInstance)
      (W3CBaggagePropagator/getInstance)])))
@@ -49,10 +59,10 @@
 (def ^:private attribute-cache (cache-wrapped/lru-cache-factory {} :threshold 32))
 
 (def ^:private attribute-creators
-  {String (fn [name] (AttributeKey/stringKey name))
-   Long (fn [name]  (AttributeKey/longKey name))
-   Double (fn [name]  (AttributeKey/doubleKey name))
-   Boolean (fn [name] (AttributeKey/booleanKey name))})
+  {String (fn [name] ((interface-static-call AttributeKey/stringKey String) name))
+   Long (fn [name]  ((interface-static-call AttributeKey/longKey String) name))
+   Double (fn [name]  ((interface-static-call AttributeKey/doubleKey String) name))
+   Boolean (fn [name] ((interface-static-call AttributeKey/booleanKey String) name))})
 
 
 (defn ^AttributeKey get-attribute-key [name value]
@@ -115,9 +125,9 @@
                                                         (build-resource tracer-attributes))))
                                 (cond-> sampler (.setSampler
                                                  (cond 
-                                                   (= sampler "on") (Sampler/alwaysOn)
-                                                   (= sampler "off") (Sampler/alwaysOff)
-                                                   (and (float? sampler) (<= 0.0 sampler 1.0)) (Sampler/traceIdRatioBased sampler)
+                                                   (= sampler "on") ((interface-static-call Sampler/alwaysOn))
+                                                   (= sampler "off") ((interface-static-call Sampler/alwaysOff))
+                                                   (and (float? sampler) (<= 0.0 sampler 1.0)) ((interface-static-call Sampler/traceIdRatioBased Double) sampler)
                                                    (instance? Sampler sampler) sampler
                                                    :else nil)))
                                 (cond-> span-processor (.addSpanProcessor span-processor))))))))]
@@ -177,13 +187,13 @@
    based on the current open telemetry span context."
   [req]
   (if-let [^OpenTelemetry ot (get-open-telemetry)]
-    (if (.isValid (.getSpanContext (Span/current)))
+    (if (.isValid (.getSpanContext ((interface-static-call Span/current))))
       (let [^TextMapPropagator propagator (.getTextMapPropagator
                                            (.getPropagators ot))
             atom-map (atom {})]
         ;;(debug propagator)
         ;;(debug (Context/current))
-        (.inject propagator (Context/current) atom-map
+        (.inject propagator ((interface-static-call Context/current)) atom-map
                  (reify TextMapSetter
                    (set [_ m key value]
                      (swap! m assoc key value))))
@@ -191,6 +201,7 @@
         (update-in req [:headers] (fn [h] (merge h @atom-map))))
       req)
     req))
+
 (defn clj-http-wrap-telemetry-span
   [client]
   (fn
@@ -235,7 +246,7 @@
        (let [^TextMapPropagator propagator (.getTextMapPropagator
                                             (or (.getPropagators ot)
                                                 (ContextPropagators/noop)))
-             ^Context new-context (.extract propagator (Context/current) req
+             ^Context new-context (.extract propagator ((interface-static-call Context/current)) req
                                             (reify TextMapGetter
                                               (get [_ obj key]
                                                 (get (:headers obj) key))))
@@ -256,7 +267,7 @@
 
 (defn timbre-wrap-telemetry-span
   [data]
-  (let [context (.getSpanContext (Span/current))]
+  (let [context (.getSpanContext ((interface-static-call Span/current)))]
     (assoc data :trace-id (.getTraceId context) :span-id (.getSpanId context) :trace-flags (.asHex (.getTraceFlags context)))))
 
 (defn timbre-output-fn

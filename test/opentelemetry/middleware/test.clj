@@ -28,7 +28,7 @@
                            {:status 200
                             :body "Hello"})}
       (clj-http-with-telemetry-span-middleware
-       (is (not (.isValid (.getSpanContext (Span/current)))))
+       (is (not (.isValid (.getSpanContext ((interface-static-call Span/current))))))
        (c/get "http://test.com"))))
   (testing "with active span context"
     (with-span "test-span"
@@ -51,21 +51,21 @@
 (defn- output-fn-wrapper
   ([data] (output-fn-wrapper nil data))
   ([opts data]
-   (is (= (:trace-id data) (.getTraceId (.getSpanContext (Span/current)))))
-   (is (= (:span-id data) (.getSpanId (.getSpanContext (Span/current)))))
-   (is (= (:trace-flags data) (.asHex (.getTraceFlags (.getSpanContext (Span/current))))))
+   (is (= (:trace-id data) (.getTraceId (.getSpanContext ((interface-static-call Span/current))))))
+   (is (= (:span-id data) (.getSpanId (.getSpanContext ((interface-static-call Span/current))))))
+   (is (= (:trace-flags data) (.asHex (.getTraceFlags (.getSpanContext ((interface-static-call Span/current)))))))
    (timbre-output-fn opts data)))
 
 (deftest test-ring-telemetry-middleware
   (testing "creates top level context"
     (let [handler (fn [req]
                     (timbre-with-telemetry-span-middleware {:output-fn output-fn-wrapper}
-                     (is (.getTraceId (.getSpanContext (Span/current))))
-                     (is (.getParentSpanContext (Span/current)))
+                     (is (.getTraceId (.getSpanContext ((interface-static-call Span/current)))))
+                     (is (.getParentSpanContext ((interface-static-call Span/current))))
                      (is (= "00000000000000000000000000000000"
-                            (.getTraceId (.getParentSpanContext (Span/current)))))
-                     (is (.isSampled (.getSpanContext (Span/current))))
-                     (is (.isValid (.getSpanContext (Span/current))))
+                            (.getTraceId (.getParentSpanContext ((interface-static-call Span/current))))))
+                     (is (.isSampled (.getSpanContext ((interface-static-call Span/current)))))
+                     (is (.isValid (.getSpanContext ((interface-static-call Span/current)))))
                      (info "**** Hello world")
                      {:status 200 :body "Hello"}))
           resp ((ring-wrap-telemetry-span handler)
@@ -75,11 +75,11 @@
     (let [handler (fn [req]
                     (timbre-with-telemetry-span-middleware {:output-fn output-fn-wrapper}
                      (is (= "2149c7c507824641b6bd38e8fe548bed"
-                            (.getTraceId (.getSpanContext (Span/current)))))
+                            (.getTraceId (.getSpanContext ((interface-static-call Span/current))))))
                      (is (= "7c34f6f8ab7c5691"
-                            (.getSpanId (.getParentSpanContext (Span/current)))))
-                     (is (.isSampled (.getSpanContext (Span/current))))
-                     (is (.isValid (.getSpanContext (Span/current))))
+                            (.getSpanId (.getParentSpanContext ((interface-static-call Span/current))))))
+                     (is (.isSampled (.getSpanContext ((interface-static-call Span/current)))))
+                     (is (.isValid (.getSpanContext ((interface-static-call Span/current)))))
                      (info "**** Hello world")
                      {:status 200 :body "Hello"}))
           resp ((ring-wrap-telemetry-span handler)
@@ -89,7 +89,7 @@
 (deftest test-span-propagation
   (testing "with active span context"
     (with-span "test-span"
-      (let [spancontext (.getSpanContext (Span/current))]
+      (let [spancontext (.getSpanContext ((interface-static-call Span/current)))]
         (with-global-fake-routes-in-isolation
           {"http://test.com" (ring-wrap-telemetry-span
                               (fn [req]
