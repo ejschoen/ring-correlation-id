@@ -1,4 +1,4 @@
-(defproject org.clojars.ejschoen/ring-correlation-id "0.5.0-SNAPSHOT"
+(defproject org.clojars.ejschoen/ring-correlation-id "0.6.0-SNAPSHOT"
   :description "Correlation ID tracing for distributed systems using ring and clj-http"
   :url "https://github.com/ejschoen/ring-correlation-id.git"
   :license {:name "Eclipse Public License"
