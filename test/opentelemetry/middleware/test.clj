@@ -51,9 +51,9 @@
 (defn- output-fn-wrapper
   ([data] (output-fn-wrapper nil data))
   ([opts data]
-   (is (= (:trace-id data) (.getTraceId (.getSpanContext ((interface-static-call Span/current))))))
-   (is (= (:span-id data) (.getSpanId (.getSpanContext ((interface-static-call Span/current))))))
-   (is (= (:trace-flags data) (.asHex (.getTraceFlags (.getSpanContext ((interface-static-call Span/current)))))))
+   (is (= (get-in data [:context :trace-id]) (.getTraceId (.getSpanContext ((interface-static-call Span/current))))))
+   (is (= (get-in data [:context :span-id]) (.getSpanId (.getSpanContext ((interface-static-call Span/current))))))
+   (is (= (get-in data [:context :trace-flags]) (.asHex (.getTraceFlags (.getSpanContext ((interface-static-call Span/current)))))))
    (timbre-output-fn opts data)))
 
 (deftest test-ring-telemetry-middleware

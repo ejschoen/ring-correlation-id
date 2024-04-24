@@ -1,6 +1,6 @@
 (ns ring.middleware.correlation-id
-  (require [taoensso.timbre :as timbre])
-  (import [java.util UUID])
+  (:require [taoensso.timbre :as timbre])
+  (:import [java.util UUID])
   )
 
 (def id-header "x-correlation-id")
