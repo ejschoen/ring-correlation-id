@@ -221,10 +221,10 @@
 
 (def ^:private exception-escaped (atom nil))
 
-(defn- ^AttributeKey get-exception-escaped
+(defn ^AttributeKey get-exception-escaped
   []
   (when-not @exception-escaped
-    (reset! exception-escaped (AttributeKey/booleanKey "exception.escaped")))
+    (reset! exception-escaped ((get attribute-creators Boolean) "exception.escaped")))
   @exception-escaped)
 
 (defn record-exception

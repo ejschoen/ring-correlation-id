@@ -16,5 +16,5 @@
                                   [org.clojars.ejschoen/clj-telemetry "0.3.1-SNAPSHOT"
                                    :exclusions [org.clojure/clojure]]
                                   [cheshire "5.9.0"]
-                                  ]}
+                                  [io.grpc/grpc-all "1.63.0"]]}
              :test {:dependencies [[io.grpc/grpc-all "1.63.0"]]}})
