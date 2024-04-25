@@ -86,6 +86,14 @@
                 {:headers {"traceparent" "00-2149c7c507824641b6bd38e8fe548bed-7c34f6f8ab7c5691-01"}})]
       )))
 
+(deftest test-ring-telemetry-middleware-with-exception
+  (testing "creates top level context"
+    (is (thrown-with-msg? Exception #"Boom!"
+                              (let [handler (fn [req] (throw (Exception. "Boom!")))
+                                    resp ((ring-wrap-telemetry-span handler)
+                                          {:headers {}})]
+                                )))))
+
 (deftest test-span-propagation
   (testing "with active span context"
     (with-span "test-span"

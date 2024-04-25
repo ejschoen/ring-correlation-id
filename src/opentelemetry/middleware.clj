@@ -227,12 +227,15 @@
     (reset! exception-escaped ((get attribute-creators Boolean) "exception.escaped")))
   @exception-escaped)
 
+(def escaped-fun )
+
 (defn record-exception
-  ([e escaped?]
+  ([^Throwable e escaped?]
    (when (.isValid (.getSpanContext (Span/current)))
      (record-exception (Span/current) e escaped?)))
-  ([span e escaped?]
-   (.recordException span e (Attributes/of (get-exception-escaped) escaped?))))
+  ([^Span span ^Throwable e escaped?]
+   (let [attr-fn (interface-static-call Attributes/of AttributeKey Object)]
+     (.recordException span e (attr-fn (get-exception-escaped) escaped?)))))
 
 (defn ring-wrap-telemetry-span
   "Ring handler that creates a span for the dynamic extent of the wrapped
