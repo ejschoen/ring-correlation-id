@@ -231,8 +231,9 @@
 
 (defn record-exception
   ([^Throwable e escaped?]
-   (when (.isValid (.getSpanContext (Span/current)))
-     (record-exception (Span/current) e escaped?)))
+   (if-let [current-span ((interface-static-call Span/current))]
+     (when (.isValid (.getSpanContext current-span))
+       (record-exception current-span e escaped?))))
   ([^Span span ^Throwable e escaped?]
    (let [attr-fn (interface-static-call Attributes/of AttributeKey Object)]
      (.recordException span e (attr-fn (get-exception-escaped) escaped?)))))
