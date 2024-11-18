@@ -131,6 +131,7 @@
                                                    (instance? Sampler sampler) sampler
                                                    :else nil)))
                                 (cond-> span-processor (.addSpanProcessor span-processor))))))))]
+                (taoensso.timbre/info "Initializing open telemetry instance")
                 ot)
               old)))
    @_ot)
@@ -220,18 +221,22 @@
 
 (def ^:private exception-escaped (atom nil))
 
-(defn- ^AttributeKey get-exception-escaped
+(defn ^AttributeKey get-exception-escaped
   []
   (when-not @exception-escaped
-    (reset! exception-escaped (AttributeKey/booleanKey "exception.escaped")))
+    (reset! exception-escaped ((get attribute-creators Boolean) "exception.escaped")))
   @exception-escaped)
 
+(def escaped-fun )
+
 (defn record-exception
-  ([e escaped?]
-   (when (.isValid (.getSpanContext (Span/current)))
-     (record-exception (Span/current) e escaped?)))
-  ([span e escaped?]
-   (.recordException span e (Attributes/of (get-exception-escaped) escaped?))))
+  ([^Throwable e escaped?]
+   (if-let [current-span ((interface-static-call Span/current))]
+     (when (.isValid (.getSpanContext current-span))
+       (record-exception current-span e escaped?))))
+  ([^Span span ^Throwable e escaped?]
+   (let [attr-fn (interface-static-call Attributes/of AttributeKey Object)]
+     (.recordException span e (attr-fn (get-exception-escaped) escaped?)))))
 
 (defn ring-wrap-telemetry-span
   "Ring handler that creates a span for the dynamic extent of the wrapped
@@ -268,7 +273,12 @@
 (defn timbre-wrap-telemetry-span
   [data]
   (let [context (.getSpanContext ((interface-static-call Span/current)))]
-    (assoc data :trace-id (.getTraceId context) :span-id (.getSpanId context) :trace-flags (.asHex (.getTraceFlags context)))))
+    (update-in data [:context]
+               (fn [old]
+                 (assoc old
+                        :trace-id (.getTraceId context)
+                        :span-id (.getSpanId context)
+                        :trace-flags (.asHex (.getTraceFlags context)))))))
 
 (defn timbre-output-fn
   "Default (fn [data]) -> string output fn.
@@ -277,19 +287,33 @@
   ([opts data] ; For partials
    (let [{:keys [no-stacktrace? stacktrace-fonts]} opts
          {:keys [level ?err #_vargs msg_ ?ns-str ?file hostname_
-                 timestamp_ ?line trace-id span-id trace-flags]} data]
-     (str
-       (force timestamp_)
-       " traceID=" trace-id
-       " spanID=" span-id
-       " traceFlags=" trace-flags
-       " " (force hostname_) " "
-       (str/upper-case (name level))  " "
-       "[" (or ?ns-str ?file "?") ":" (or ?line "?") "] - "
-       (force msg_)
-       (when-not no-stacktrace?
-         (when-let [err ?err]
-           (str enc/system-newline (stacktrace err opts))))))))
+                 timestamp_ ?line trace-id span-id trace-flags]} data
+         sb (StringBuilder.)]
+     (.append sb (force timestamp_))
+     (when (and trace-id (not (re-matches #"0*" trace-id)))
+       (.append sb " traceID=")
+       (.append sb trace-id)
+       (.append sb " traceFlags=")
+       (.append sb trace-flags))
+     (when (and span-id (not (re-matches #"0*" span-id)))
+       (.append sb " spanID=")
+       (.append sb span-id))
+     (.append sb \space)
+     (.append sb (force hostname_))
+     (.append sb \space)
+     (.append sb (str/upper-case (name level)))
+     (.append sb \space)
+     (.append sb \[)
+     (.append sb (or ?ns-str ?file "?"))
+     (.append sb \:)
+     (.append sb (or ?line "?"))
+     (.append sb "] - ")
+     (.append sb (force msg_))
+     (when-not no-stacktrace?
+       (when-let [err ?err]
+         (.append sb enc/system-newline)
+         (.append sb (stacktrace err opts))))
+     (.toString sb))))
 
 (def delta-config
    {:output-fn timbre-output-fn

@@ -51,9 +51,9 @@
 (defn- output-fn-wrapper
   ([data] (output-fn-wrapper nil data))
   ([opts data]
-   (is (= (:trace-id data) (.getTraceId (.getSpanContext ((interface-static-call Span/current))))))
-   (is (= (:span-id data) (.getSpanId (.getSpanContext ((interface-static-call Span/current))))))
-   (is (= (:trace-flags data) (.asHex (.getTraceFlags (.getSpanContext ((interface-static-call Span/current)))))))
+   (is (= (get-in data [:context :trace-id]) (.getTraceId (.getSpanContext ((interface-static-call Span/current))))))
+   (is (= (get-in data [:context :span-id]) (.getSpanId (.getSpanContext ((interface-static-call Span/current))))))
+   (is (= (get-in data [:context :trace-flags]) (.asHex (.getTraceFlags (.getSpanContext ((interface-static-call Span/current)))))))
    (timbre-output-fn opts data)))
 
 (deftest test-ring-telemetry-middleware
@@ -85,6 +85,14 @@
           resp ((ring-wrap-telemetry-span handler)
                 {:headers {"traceparent" "00-2149c7c507824641b6bd38e8fe548bed-7c34f6f8ab7c5691-01"}})]
       )))
+
+(deftest test-ring-telemetry-middleware-with-exception
+  (testing "creates top level context"
+    (is (thrown-with-msg? Exception #"Boom!"
+                              (let [handler (fn [req] (throw (Exception. "Boom!")))
+                                    resp ((ring-wrap-telemetry-span handler)
+                                          {:headers {}})]
+                                )))))
 
 (deftest test-span-propagation
   (testing "with active span context"
