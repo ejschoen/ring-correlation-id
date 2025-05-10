@@ -287,7 +287,8 @@
   ([opts data] ; For partials
    (let [{:keys [no-stacktrace? stacktrace-fonts]} opts
          {:keys [level ?err #_vargs msg_ ?ns-str ?file hostname_
-                 timestamp_ ?line trace-id span-id trace-flags]} data
+                 timestamp_ ?line context]} data
+         {:keys [trace-id span-id trace-flags]} context
          sb (StringBuilder.)]
      (.append sb (force timestamp_))
      (when (and trace-id (not (re-matches #"0*" trace-id)))
@@ -327,3 +328,11 @@
     `(with-merged-config
        delta-config
        ~@body)))
+
+(defmacro with-span
+  [id & body]
+  (try (let [^Span span# (tracing/create-span (tracing/get-tracer (get-open-telemetry)) ~id)]
+         (.makeCurrent span)
+         ~@body)
+       (finally
+         (.end span#))))
