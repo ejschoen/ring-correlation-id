@@ -5,7 +5,8 @@
             [clj-http.middleware.correlation-id :as hcid]
             [timbre.middleware.correlation-id :as tcid])
   (:require [taoensso.encore :as enc]
-            [taoensso.timbre :refer [errorf warnf debug debugf with-merged-config stacktrace]])
+            [taoensso.timbre :refer [errorf warnf debug debugf with-merged-config
+                                     stacktrace]])
   (:require [opentelemetry.w3c-trace-context])
   (:require [clj-http.client :as http])
   (:require [telemetry.tracing :as tracing])
@@ -287,7 +288,7 @@
   ([opts data] ; For partials
    (let [{:keys [no-stacktrace? stacktrace-fonts]} opts
          {:keys [level ?err #_vargs msg_ ?ns-str ?file hostname_
-                 timestamp_ ?line context]} data
+                 timestamp_ ?line context output-opts]} data
          {:keys [trace-id span-id trace-flags]} context
          sb (StringBuilder.)]
      (.append sb (force timestamp_))
@@ -313,7 +314,9 @@
      (when-not no-stacktrace?
        (when-let [err ?err]
          (.append sb enc/system-newline)
-         (.append sb (stacktrace err opts))))
+         (.append sb (if-let [ef (:error-fn output-opts)]
+                       (ef data)
+                       (stacktrace err opts)))))
      (.toString sb))))
 
 (def delta-config
@@ -331,8 +334,9 @@
 
 (defmacro with-span
   [id & body]
-  (try (let [^Span span# (tracing/create-span (tracing/get-tracer (get-open-telemetry)) ~id)]
-         (.makeCurrent span)
-         ~@body)
-       (finally
-         (.end span#))))
+  `(let [^Span span# (tracing/create-span (tracing/get-tracer (get-open-telemetry)) ~id)]  
+    (try 
+      (.makeCurrent span#)
+      ~@body
+      (finally
+        (.end span#)))))
