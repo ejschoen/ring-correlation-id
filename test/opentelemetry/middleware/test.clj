@@ -7,6 +7,7 @@
   (:use [opentelemetry.w3c-trace-context])
   (:use [clj-http.fake])
   (:require [timbre.middleware.correlation-id :as tcid])
+  (:import [io.opentelemetry.api GlobalOpenTelemetry OpenTelemetry])
   (:import [io.opentelemetry.context Context]
            [io.opentelemetry.context.propagation ContextPropagators
             TextMapPropagator TextMapGetter TextMapSetter ]
@@ -122,3 +123,43 @@
            }
           (clj-http-with-telemetry-span-middleware
            (c/get "http://test.com")))))))
+
+(deftest test-create-open-telemetry-adopts-a-global-claimed-elsewhere
+  ;; GlobalOpenTelemetry takes one registration per JVM, and this namespace is
+  ;; not the only thing that claims it.  Solr 10's OpenTelemetryConfigurator
+  ;; calls GlobalOpenTelemetry.set from CoreContainer.load, which Solr 9 never
+  ;; did.  Whichever side lost that race used to get an IllegalStateException
+  ;; and leave _ot nil, so every later call retried and threw again -- each time
+  ;; printing the winner's stack, because OpenTelemetry attaches the first
+  ;; registration to the exception as its cause.
+  (let [ot-atom (var-get #'opentelemetry.middleware/_ot)]
+    (reset-open-telemetry!)
+    ;; Stand in for Solr: claim the global without going through this namespace.
+    (GlobalOpenTelemetry/set (OpenTelemetry/propagating (ContextPropagators/noop)))
+    (reset! ot-atom nil)
+    (let [adopted (create-open-telemetry! {:sampler "on"
+                                           :tracer-attributes {"service.name" "test"}})]
+      (is (some? adopted)
+          "losing the race must still yield an OpenTelemetry, not an exception")
+      (is (identical? adopted (GlobalOpenTelemetry/get))
+          "and it must be the instance that is actually registered")
+      (is (some? @ot-atom)
+          "which must be cached, so a later call does not retry the registration"))
+    (is (identical? (GlobalOpenTelemetry/get)
+                    (create-open-telemetry! {:sampler "on"}))
+        "so a second call is a no-op rather than a second failure")))
+
+(deftest test-create-open-telemetry-registers-once-under-contention
+  ;; buildAndRegisterGlobal used to run inside swap!, whose function is re-run
+  ;; whenever the compare-and-set loses.  Two threads arriving together each
+  ;; registered the global, and the loser threw.
+  (reset-open-telemetry!)
+  (let [attempts (->> (repeatedly 8 #(future (create-open-telemetry!
+                                              {:sampler "on"
+                                               :tracer-attributes {"service.name" "test"}})))
+                      doall
+                      (mapv #(try (deref %) (catch Exception e e))))]
+    (is (every? (partial instance? OpenTelemetry) attempts)
+        "no caller may see the registration fail")
+    (is (apply = attempts)
+        "and every caller must get the one registered instance")))

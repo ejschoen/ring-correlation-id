@@ -27,8 +27,12 @@
   
   )
 
-(def ^:private _ot (atom nil))
-(def ^:private _tracer (atom nil))
+;; defonce, not def: GlobalOpenTelemetry is a JVM-wide singleton that outlives any
+;; namespace reload.  A plain def would hand a reloaded namespace an empty cache
+;; while the global stayed claimed, and every later create-open-telemetry! would
+;; try to register again and throw.
+(defonce ^:private _ot (atom nil))
+(defonce ^:private _tracer (atom nil))
 
 (defn set-open-telemetry!
   "Set the open telemetry instance for this process, unless already set."
@@ -93,6 +97,52 @@
         (.put builder (name key) val)))
     (.build builder)))
 
+(defn- ^OpenTelemetry register-global!
+  "Build an OpenTelemetrySdk from opts and install it as this process's
+   GlobalOpenTelemetry, returning whatever ends up registered.
+
+   GlobalOpenTelemetry takes exactly one registration for the life of the JVM,
+   and other libraries on the classpath claim it too: Solr 10's
+   OpenTelemetryConfigurator calls GlobalOpenTelemetry.set from
+   CoreContainer.load, which Solr 9 never did.  Losing that race is not worth
+   propagating -- adopt what is registered instead, so spans still reach a
+   provider and the caller is not left retrying a registration that can never
+   succeed.
+
+   The sdk built here is abandoned when the race is lost.  Nothing ever feeds it
+   a span, so the cost is one idle span-processor thread, once per process."
+  [{:keys [propagators span-processor tracer-provider sampler tracer-attributes]}]
+  (try
+    (let [ot (.buildAndRegisterGlobal
+              (doto (OpenTelemetrySdk/builder)
+                (cond-> propagators
+                  (.setPropagators propagators))
+                (cond-> tracer-provider
+                  (.setTracerProvider tracer-provider))
+                (cond-> (or span-processor tracer-attributes)
+                  (.setTracerProvider
+                   (.build
+                    (doto (SdkTracerProvider/builder)
+                      (cond-> tracer-attributes
+                        (.setResource (.merge (Resource/getDefault)
+                                              (build-resource tracer-attributes))))
+                      (cond-> sampler (.setSampler
+                                       (cond 
+                                         (= sampler "on") ((interface-static-call Sampler/alwaysOn))
+                                         (= sampler "off") ((interface-static-call Sampler/alwaysOff))
+                                         (and (float? sampler) (<= 0.0 sampler 1.0)) ((interface-static-call Sampler/traceIdRatioBased Double) sampler)
+                                         (instance? Sampler sampler) sampler
+                                         :else nil)))
+                      (cond-> span-processor (.addSpanProcessor span-processor))))))))]
+      (taoensso.timbre/info "Initializing open telemetry instance")
+      ot)
+    (catch IllegalStateException e
+      (warnf (str "GlobalOpenTelemetry was already registered by something else, so "
+                  "this configuration is ignored and the registered instance is used "
+                  "instead: %s")
+             (.getMessage e))
+      (GlobalOpenTelemetry/get))))
+
 (defn create-open-telemetry!
   "If the open telemetry instance for this process is not already set,
    create one and registery it as global.
@@ -108,33 +158,14 @@
      :as opts}]
    (when (and span-processor tracer-provider)
      (throw (Exception. "create-open-telemetry!: Optionally provide span-processor or tracer-provider, but not both.")))
-   (swap! _ot
-          (fn [old]
-            (if (not old)
-              (let [ot (.buildAndRegisterGlobal
-                        (doto (OpenTelemetrySdk/builder)
-                          (cond-> propagators
-                            (.setPropagators propagators))
-                          (cond-> tracer-provider
-                            (.setTracerProvider tracer-provider))
-                          (cond-> (or span-processor tracer-attributes)
-                            (.setTracerProvider
-                             (.build
-                              (doto (SdkTracerProvider/builder)
-                                (cond-> tracer-attributes
-                                  (.setResource (.merge (Resource/getDefault)
-                                                        (build-resource tracer-attributes))))
-                                (cond-> sampler (.setSampler
-                                                 (cond 
-                                                   (= sampler "on") ((interface-static-call Sampler/alwaysOn))
-                                                   (= sampler "off") ((interface-static-call Sampler/alwaysOff))
-                                                   (and (float? sampler) (<= 0.0 sampler 1.0)) ((interface-static-call Sampler/traceIdRatioBased Double) sampler)
-                                                   (instance? Sampler sampler) sampler
-                                                   :else nil)))
-                                (cond-> span-processor (.addSpanProcessor span-processor))))))))]
-                (taoensso.timbre/info "Initializing open telemetry instance")
-                ot)
-              old)))
+   ;; Double-checked locking rather than swap!.  Registering the global is a side
+   ;; effect, and swap! re-runs its function whenever the compare-and-set loses,
+   ;; so two threads arriving together would each register and the loser would
+   ;; throw.
+   (when-not @_ot
+     (locking _ot
+       (when-not @_ot
+         (reset! _ot (register-global! (assoc opts :propagators propagators))))))
    @_ot)
   ([]
    (create-open-telemetry! {})))
@@ -178,8 +209,8 @@
 
 (defn get-context-header [req]
   "Return the W3C trace context headers as a 2-tuple list of traceparent and tracestate."
-  (let [traceparent (get-in req [:headers "traceparent"])
-        tracestate (get-in req [:headers "tracestate"])]
+  (let [traceparent (get-in req [:headers "traceparent"] (get-in req [:headers "Traceparent"]))
+        tracestate (get-in req [:headers "tracestate"] (get-in req [:headers "Tracestate"]))]
     (if traceparent
       (list traceparent tracestate)
       nil)))
@@ -255,7 +286,10 @@
              ^Context new-context (.extract propagator ((interface-static-call Context/current)) req
                                             (reify TextMapGetter
                                               (get [_ obj key]
-                                                (get (:headers obj) key))))
+                                                (let [val (get (:headers obj) key)]
+                                                  #_(println (format "**** ring-wrap-telemetry-span: get context with key %s: %s"
+                                                                     key val))
+                                                  val))))
              ^Span span (.startSpan
                          (doto (.spanBuilder (get-tracer)
                                              (or (not-empty span-name)
@@ -264,8 +298,10 @@
                            (.setSpanKind SpanKind/SERVER)))]
          (try (with-open [^Scope scope (.makeCurrent span)]
                 (clj-http-with-telemetry-span-middleware
+                 #_(println (format "**** ring-wrap-telemetry-span: Invoking next handler with TraceID %s" (.getTraceId (.getSpanContext span))))
                  (handler req)))
               (catch Throwable e
+                #_(println (format "**** ring-wrap-telemetry-span: Exception: %s" (.getMessage e)))
                 (record-exception span e true)
                 (throw e))
               (finally (.end span))))
