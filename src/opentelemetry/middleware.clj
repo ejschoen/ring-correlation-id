@@ -35,18 +35,13 @@
 (defonce ^:private _tracer (atom nil))
 
 (defn set-open-telemetry!
-  "Set the open telemetry instance for this process, unless already set.
-
-   Installing an instance DROPS any cached tracer, so the next get-tracer
-   builds from what was just installed.  get-tracer memoizes, and
-   get-open-telemetry answers the noop instance until something is registered:
-   without this, one get-tracer call made before the instance was installed
-   would cache a NOOP tracer for the life of the process, and every later
-   with-span would start an invalid span forever."
+  "Set the open telemetry instance for this process, unless already set."
   [ot]
-  (let [[old _] (swap-vals! _ot (fn [old] (if (not old) ot old)))]
-    (when (nil? old)
-      (reset! _tracer nil)))
+  (swap! _ot
+         (fn [old]
+           (if (not old)
+             ot
+             old)))
   @_ot)
 
 ;;Wow.  Calling static interface methods in Java 11 fails in Clojure 1.8
@@ -170,14 +165,7 @@
    (when-not @_ot
      (locking _ot
        (when-not @_ot
-         (reset! _ot (register-global! (assoc opts :propagators propagators)))
-         ;; Drop any cached tracer, for the same reason set-open-telemetry!
-         ;; does: get-tracer memoizes, and a call made BEFORE this one cached a
-         ;; tracer built from the noop instance get-open-telemetry answers when
-         ;; nothing is registered.  Keeping it would make every later with-span
-         ;; invalid for the life of the process.  After _ot, so a concurrent
-         ;; get-tracer rebuilds from the instance that is now installed.
-         (reset! _tracer nil))))
+         (reset! _ot (register-global! (assoc opts :propagators propagators))))))
    @_ot)
   ([]
    (create-open-telemetry! {})))
@@ -187,15 +175,39 @@
    return the noop instance."
   (or @_ot (OpenTelemetry/noop)))
 
-(defn get-tracer [& [name]]
+(defn get-tracer
   "Get the tracer for this process.  If a tracer is not set, create one,
-   optionally with the given name."
-  (when (not @_tracer)
-    ;;(debugf "Building a new tracer with name %s" name)
-    (reset! _tracer (.build (.tracerBuilder (get-open-telemetry)
-                                            (or name
-                                                "org.ejschoen.opentelemetry.middleware")))))
-  @_tracer)
+   optionally with the given name.
+
+   INVARIANT: _tracer only ever holds a tracer built from _ot.  A tracer is
+   cached only when an OpenTelemetry instance is actually registered; until
+   then get-open-telemetry answers the noop instance, and a tracer built from
+   THAT is returned uncached, on every call.
+
+   That invariant is the point, because this function memoizes.  Without it,
+   ONE call made before create-open-telemetry! - anything that spans, traces or
+   logs during boot - cached a NOOP tracer for the life of the process, and
+   every later with-span started an invalid span forever: silently, with no
+   exception, no traceparent and no traceID= on any log line, indistinguishable
+   from telemetry being switched off.  Caching only what came from a registered
+   instance makes that unrepresentable rather than merely unlikely, and it
+   holds for a get-tracer racing an in-progress registration too - _ot is read
+   ONCE, and the tracer is built from exactly the value that decided whether to
+   cache it.
+
+   set-tracer! is the one way past this: it caches whatever it is handed, so a
+   caller that hands it a tracer from an unregistered instance owns the
+   consequence."
+  [& [name]]
+  (or @_tracer
+      ;;(debugf "Building a new tracer with name %s" name)
+      (let [ot @_ot
+            tracer (.build (.tracerBuilder (or ot (OpenTelemetry/noop))
+                                           (or name
+                                               "org.ejschoen.opentelemetry.middleware")))]
+        (when ot
+          (reset! _tracer tracer))
+        tracer)))
 
 (defn set-tracer! [tracer]
   "Set the tracer for this process, if not already set."

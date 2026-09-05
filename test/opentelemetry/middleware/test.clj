@@ -13,7 +13,9 @@
             TextMapPropagator TextMapGetter TextMapSetter ]
            [io.opentelemetry.api.common AttributeKey]
            [io.opentelemetry.api.trace Span])
-  (:import [io.opentelemetry.sdk.common CompletableResultCode]
+  (:import [io.opentelemetry.sdk OpenTelemetrySdk]
+           [io.opentelemetry.sdk.common CompletableResultCode]
+           [io.opentelemetry.sdk.trace SdkTracerProvider]
            [io.opentelemetry.sdk.trace.export SimpleSpanProcessor SpanExporter]))
 
 (use-fixtures :each (fn [f]
@@ -440,12 +442,33 @@
     (is (span-named @spans "after-registration")
         "and it reached the exporter")))
 
-(deftest test-set-open-telemetry-also-drops-the-cached-tracer
-  (reset-open-telemetry!)
-  (let [early (get-tracer "too.early")]
-    (is (identical? early (get-tracer))
-        "precondition: get-tracer memoizes")
-    (set-open-telemetry! (create-open-telemetry!
-                          {:sampler "on" :tracer-attributes {"service.name" "test"}}))
-    (is (not (identical? early (get-tracer)))
-        "installing an instance drops the tracer cached from the noop")))
+(deftest test-set-open-telemetry-serves-a-tracer-from-the-instance-it-installed
+  ;; set-open-telemetry! ON ITS OWN: an OpenTelemetrySdk built directly - never
+  ;; registered as the global, never routed through create-open-telemetry! -
+  ;; installed AFTER a get-tracer call has already happened in the noop era.
+  ;;
+  ;; Under the invariant, that noop-era call cached nothing, so the tracer this
+  ;; span comes from is built from the SDK just installed, and the span reaches
+  ;; that SDK's own exporter.  Without the invariant the cached noop tracer is
+  ;; what with-span gets, forever.
+  (let [spans (atom [])]
+    (reset-open-telemetry!)
+    (let [early (get-tracer "too.early")]
+      (is (some? early) "the noop-era call still gets a usable tracer")
+      (is (not (.isValid (.getSpanContext (.startSpan (.spanBuilder early "noop")))))
+          "precondition: it is the noop's, so the spans it makes are invalid"))
+    (let [sdk (-> (OpenTelemetrySdk/builder)
+                  (.setTracerProvider
+                   (-> (SdkTracerProvider/builder)
+                       (.addSpanProcessor
+                        (SimpleSpanProcessor/create (collecting-exporter spans)))
+                       (.build)))
+                  (.build))]
+      (is (identical? sdk (set-open-telemetry! sdk))
+          "precondition: this call is what installed the instance")
+      (with-span "after-set-open-telemetry"
+        (is (.isValid (.getSpanContext ((interface-static-call Span/current))))
+            "the span comes from a tracer built from the installed SDK,
+             not from the tracer the noop era would have cached"))
+      (is (span-named @spans "after-set-open-telemetry")
+          "and it reached THAT SDK's exporter"))))

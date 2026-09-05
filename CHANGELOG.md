@@ -25,10 +25,17 @@ All notable changes to this project will be documented in this file. This change
   `create-open-telemetry!` cached a noop tracer for the life of the process:
   every later `with-span` then started an invalid span, silently — no
   exception, no `traceparent`, no `traceID=` on any log line, and no way to
-  tell it from "telemetry is off".  `create-open-telemetry!` and
-  `set-open-telemetry!` now drop the cached tracer when they install an
-  instance, so the next `get-tracer` builds from what was registered.
-  `reset-open-telemetry!` already did this.
+  tell it from "telemetry is off".
+
+  `get-tracer` now holds an invariant instead: **the cache only ever contains a
+  tracer built from a registered instance.**  With nothing registered it
+  returns an uncached tracer from the noop instance on every call, so there is
+  nothing to go stale; the first call made after an instance is installed
+  builds from that instance and caches it.  The instance is read once and the
+  tracer is built from exactly the value that decided whether to cache it, so a
+  `get-tracer` racing an in-progress registration cannot cache the noop either.
+  (`set-tracer!` remains an explicit override and caches whatever it is
+  handed.)
 
 ### Added
 - `opentelemetry.middleware/current-trace-context` — the current W3C trace context
