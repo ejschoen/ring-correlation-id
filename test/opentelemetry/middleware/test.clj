@@ -411,3 +411,41 @@
               "the task runs on the submitter's trace")
           (is (= (.getSpanId submitter) (.getParentSpanId task-span))
               "as a child of the submitting span"))))))
+
+(deftest test-get-tracer-is-not-poisoned-by-a-call-before-registration
+  ;; get-tracer memoizes, and get-open-telemetry answers the NOOP instance
+  ;; until something is registered.  A single get-tracer call made before
+  ;; create-open-telemetry! used to cache a noop tracer for the life of the
+  ;; process, and every with-span after it started an invalid span forever -
+  ;; silently: no exception, no traceparent, no traceID= on any log line.
+  ;; Boot order made it latent rather than harmless.
+  ;;
+  ;; Deliberately NOT written with with-collected-spans: that resets the
+  ;; process first, which would clear the cached tracer by itself and the test
+  ;; would pass with the fix removed.  create-open-telemetry! has to do it.
+  (let [spans (atom [])]
+    (reset-open-telemetry!)
+    (let [early (get-tracer "too.early")]
+      (is (some? early) "the early call still gets a usable (noop) tracer")
+      (is (not (.isValid (.getSpanContext (.startSpan (.spanBuilder early "noop")))))
+          "precondition: a tracer from the unregistered instance makes invalid spans"))
+    ;; No reset in between - registering is what must drop the cached tracer.
+    (create-open-telemetry!
+     {:sampler "on"
+      :span-processor (SimpleSpanProcessor/create (collecting-exporter spans))
+      :tracer-attributes {"service.name" "ring-correlation-id-test"}})
+    (with-span "after-registration"
+      (is (.isValid (.getSpanContext ((interface-static-call Span/current))))
+          "a span started after registration is valid, not the cached noop's"))
+    (is (span-named @spans "after-registration")
+        "and it reached the exporter")))
+
+(deftest test-set-open-telemetry-also-drops-the-cached-tracer
+  (reset-open-telemetry!)
+  (let [early (get-tracer "too.early")]
+    (is (identical? early (get-tracer))
+        "precondition: get-tracer memoizes")
+    (set-open-telemetry! (create-open-telemetry!
+                          {:sampler "on" :tracer-attributes {"service.name" "test"}}))
+    (is (not (identical? early (get-tracer)))
+        "installing an instance drops the tracer cached from the noop")))

@@ -20,6 +20,16 @@ All notable changes to this project will be documented in this file. This change
 
   The macro's name, arity and return value are unchanged.
 
+- `get-tracer` memoizes, and `get-open-telemetry` answers the noop instance
+  until something is registered, so ONE `get-tracer` call made before
+  `create-open-telemetry!` cached a noop tracer for the life of the process:
+  every later `with-span` then started an invalid span, silently — no
+  exception, no `traceparent`, no `traceID=` on any log line, and no way to
+  tell it from "telemetry is off".  `create-open-telemetry!` and
+  `set-open-telemetry!` now drop the cached tracer when they install an
+  instance, so the next `get-tracer` builds from what was registered.
+  `reset-open-telemetry!` already did this.
+
 ### Added
 - `opentelemetry.middleware/current-trace-context` — the current W3C trace context
   as a map of header name to header value, or nil when no valid span is current.

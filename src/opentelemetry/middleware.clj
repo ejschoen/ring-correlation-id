@@ -35,13 +35,18 @@
 (defonce ^:private _tracer (atom nil))
 
 (defn set-open-telemetry!
-  "Set the open telemetry instance for this process, unless already set."
+  "Set the open telemetry instance for this process, unless already set.
+
+   Installing an instance DROPS any cached tracer, so the next get-tracer
+   builds from what was just installed.  get-tracer memoizes, and
+   get-open-telemetry answers the noop instance until something is registered:
+   without this, one get-tracer call made before the instance was installed
+   would cache a NOOP tracer for the life of the process, and every later
+   with-span would start an invalid span forever."
   [ot]
-  (swap! _ot
-         (fn [old]
-           (if (not old)
-             ot
-             old)))
+  (let [[old _] (swap-vals! _ot (fn [old] (if (not old) ot old)))]
+    (when (nil? old)
+      (reset! _tracer nil)))
   @_ot)
 
 ;;Wow.  Calling static interface methods in Java 11 fails in Clojure 1.8
@@ -165,7 +170,14 @@
    (when-not @_ot
      (locking _ot
        (when-not @_ot
-         (reset! _ot (register-global! (assoc opts :propagators propagators))))))
+         (reset! _ot (register-global! (assoc opts :propagators propagators)))
+         ;; Drop any cached tracer, for the same reason set-open-telemetry!
+         ;; does: get-tracer memoizes, and a call made BEFORE this one cached a
+         ;; tracer built from the noop instance get-open-telemetry answers when
+         ;; nothing is registered.  Keeping it would make every later with-span
+         ;; invalid for the life of the process.  After _ot, so a concurrent
+         ;; get-tracer rebuilds from the instance that is now installed.
+         (reset! _tracer nil))))
    @_ot)
   ([]
    (create-open-telemetry! {})))
