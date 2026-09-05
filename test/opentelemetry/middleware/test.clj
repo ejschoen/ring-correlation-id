@@ -472,3 +472,54 @@
              not from the tracer the noop era would have cached"))
       (is (span-named @spans "after-set-open-telemetry")
           "and it reached THAT SDK's exporter"))))
+
+(deftest test-without-trace-context-roots-work-that-is-not-the-callers
+  ;; The case this exists for: an administrative request that re-creates a
+  ;; batch of previously-planned work inline on the request thread.  Without
+  ;; it, every re-created item captures the request's span and thousands of
+  ;; unrelated documents join one trace whose root is an operator clicking a
+  ;; button.
+  (let [spans (atom [])]
+    (with-collected-spans spans
+      (with-span "request"
+        (let [request-trace (.getTraceId (.getSpanContext ((interface-static-call Span/current))))
+              request-span (.getSpanId (.getSpanContext ((interface-static-call Span/current))))]
+          (is (.isValid (.getSpanContext ((interface-static-call Span/current))))
+              "precondition: the request span is current")
+          (without-trace-context
+            (is (not (.isValid (.getSpanContext ((interface-static-call Span/current)))))
+                "inside, no valid span is current")
+            (is (nil? (current-trace-context))
+                "so there is nothing to capture onto a re-created item")
+            (with-span "restored" nil))
+          (is (= request-span
+                 (.getSpanId (.getSpanContext ((interface-static-call Span/current)))))
+              "and the request span is current again afterwards")
+          (let [restored (span-named @spans "restored")]
+            (is restored)
+            (is (= "0000000000000000" (.getParentSpanId restored))
+                "the span started inside is a ROOT")
+            (is (not= request-trace (.getTraceId restored))
+                "on a trace of its own, not the request's"))))
+      (let [request (span-named @spans "request")]
+        (is request "the request span still ended and was recorded")))))
+
+(deftest test-extract-trace-context-reads-only-maps
+  ;; The TextMapGetter calls clojure.core/keys on the carrier, which throws on
+  ;; a non-map the moment a propagator iterates it.  Losing a trace to a wire
+  ;; shape nobody expected is a reporting loss; throwing there would cost the
+  ;; work that was carrying it.
+  (let [spans (atom [])]
+    (with-collected-spans spans
+      (with-span "captured"
+        (let [headers (current-trace-context)]
+          (is (map? headers) "precondition: a real capture is a map")
+          (is (some? (extract-trace-context headers))
+              "precondition: a map carrier extracts")))
+      (doseq [carrier ["not-a-map" ["traceparent" "00-x"] 42 :traceparent]]
+        (is (nil? (extract-trace-context carrier))
+            (format "a %s carrier answers nil rather than throwing"
+                    (.getName (class carrier)))))
+      (is (nil? (extract-trace-context {})) "and so does an empty map")
+      (is (= :ran (with-trace-context "not-a-map" :ran))
+          "with-trace-context of a non-map runs its body unchanged"))))

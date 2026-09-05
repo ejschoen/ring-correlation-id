@@ -195,8 +195,9 @@
    ONCE, and the tracer is built from exactly the value that decided whether to
    cache it.
 
-   set-tracer! is the one way past this: it caches whatever it is handed, so a
-   caller that hands it a tracer from an unregistered instance owns the
+   set-tracer! is the one way past this: it installs a tracer of the caller's
+   own when none is cached yet (it is set-if-absent, not an override), so a
+   caller that hands it a tracer built from an unregistered instance owns the
    consequence."
   [& [name]]
   (or @_tracer
@@ -299,9 +300,15 @@
    trace and nothing was current -- so a caller can skip making a context
    current instead of making an invalid one current.  When a valid span IS
    already current and the headers add nothing, the current context comes back,
-   and making it current again is a no-op."
+   and making it current again is a no-op.
+
+   Only a MAP is read.  Anything else - a string, a vector, whatever survived a
+   wire shape nobody expected - answers nil rather than being handed to the
+   propagator: the TextMapGetter below calls clojure.core/keys on the carrier,
+   which throws on a non-map the moment a propagator iterates it, and losing a
+   trace must never cost the work that was carrying it."
   [headers]
-  (when (seq headers)
+  (when (and (map? headers) (seq headers))
     (let [^OpenTelemetry ot (get-open-telemetry)
           ^TextMapPropagator propagator (.getTextMapPropagator (.getPropagators ot))
           ^Context context (.extract propagator ((interface-static-call Context/current))
@@ -337,6 +344,27 @@
        (with-open [^Scope scope# (.makeCurrent context#)]
          (f#))
        (f#))))
+
+(defmacro without-trace-context
+  "Execute body with NO trace context current on this thread: the root context
+   is made current, so Span/current is invalid, current-trace-context returns
+   nil, and any with-span inside starts a new ROOT trace.  The Scope is always
+   closed, so whatever was current before the body is current again after it.
+
+   Use it where work that is NOT part of the caller's trace runs on the
+   caller's thread.  The case it exists for: an administrative HTTP request
+   that re-creates a batch of previously-planned work - a queue restore, a
+   reconcile from durable rows - inline on the request thread.  Without this,
+   every one of those items would capture the request's span and thousands of
+   unrelated documents would join one trace whose root is an operator clicking
+   a button.  Rooting them is not a detail: a trace that means \"everything that
+   was in the database when someone restarted a queue\" means nothing.
+
+   This is about the AMBIENT span, not about telemetry being on: with no SDK
+   registered the body behaves exactly as it would anyway."
+  [& body]
+  `(with-open [^Scope scope# (.makeCurrent ((interface-static-call Context/root)))]
+     ~@body))
 
 (defn wrap-with-current-context
   "Return a fn that runs f under the io.opentelemetry.context.Context that is

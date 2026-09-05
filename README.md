@@ -102,6 +102,15 @@ and starts a root span of its own.  Carry it explicitly:
     (do-the-work item)))
 ```
 
+```clojure
+;; And where work that is NOT the caller's runs on the caller's thread - an
+;; admin request that re-creates a batch of previously planned work inline -
+;; root it explicitly, or every item joins the request's trace:
+(otmw/without-trace-context
+  (doseq [row (rows-to-restore)]
+    (put-on-queue (rebuild-item row))))     ; each gets a trace of its own
+```
+
 `current-trace-context` returns nil when no valid span is current, and
 `with-trace-context` of nil runs its body unchanged, so code written this way
 behaves identically when telemetry is not configured.

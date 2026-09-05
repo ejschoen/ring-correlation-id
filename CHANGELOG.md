@@ -34,8 +34,14 @@ All notable changes to this project will be documented in this file. This change
   builds from that instance and caches it.  The instance is read once and the
   tracer is built from exactly the value that decided whether to cache it, so a
   `get-tracer` racing an in-progress registration cannot cache the noop either.
-  (`set-tracer!` remains an explicit override and caches whatever it is
-  handed.)
+  (`set-tracer!` is unchanged: it is set-if-absent, so it installs a tracer of
+  the caller's own only when none is cached yet.)
+
+- `extract-trace-context` handed a non-map carrier (a string, a vector — any
+  wire shape nobody expected) would throw from the `TextMapGetter` as soon as
+  a propagator iterated its keys.  It now reads only maps and answers nil
+  otherwise: losing a trace is a reporting loss, and it must never cost the
+  work that was carrying it.
 
 ### Added
 - `opentelemetry.middleware/current-trace-context` — the current W3C trace context
@@ -47,6 +53,13 @@ All notable changes to this project will be documented in this file. This change
   only the string name would lose the trace silently.
 - `opentelemetry.middleware/with-trace-context` — run a body with such headers
   current on this thread, always releasing the `Scope`.
+- `opentelemetry.middleware/without-trace-context` — run a body with NO trace
+  context current: the root context is made current, so `Span/current` is
+  invalid, `current-trace-context` returns nil and any `with-span` inside
+  starts a new root.  For work that is not part of the caller's trace but runs
+  on the caller's thread — an administrative request that re-creates a batch of
+  previously-planned work inline, where capturing the request's span would put
+  thousands of unrelated items on one trace rooted at an operator's button.
 - `opentelemetry.middleware/wrap-with-current-context` — a Clojure fn that runs
   another fn under the `Context` that was current when it was wrapped.
 
