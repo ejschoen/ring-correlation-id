@@ -197,16 +197,6 @@
   (reset! _ot nil)
   (reset! _tracer nil))
 
-(defmacro with-span
-  "Execute body within the context of an open telemetry span,"
-  [name & body]
-  `(let [span# (tracing/create-span (get-tracer) ~name)]
-     (try
-       (with-open [^Scope scope# (.makeCurrent span#)]
-         ~@body
-         )
-       (finally (tracing/end-span span#)))))
-
 (defn get-context-header [req]
   "Return the W3C trace context headers as a 2-tuple list of traceparent and tracestate."
   (let [traceparent (get-in req [:headers "traceparent"] (get-in req [:headers "Traceparent"]))
@@ -234,6 +224,114 @@
         (update-in req [:headers] (fn [h] (merge h @atom-map))))
       req)
     req))
+
+;;; Carrying a trace across a thread or a process boundary.
+;;;
+;;; OpenTelemetry's current Context is a Java thread-local, not a Clojure
+;;; dynamic binding: neither future nor bound-fn carries it, and a work item
+;;; handed to an executor -- or serialized and picked up by another process --
+;;; arrives on a thread that has no trace at all, where every span it starts is
+;;; a fresh root.  What follows is the two halves of carrying it anyway: capture
+;;; the current context as plain W3C header strings that can travel on anything,
+;;; and make those strings current again on the far side.  wrap-with-current-context
+;;; is the shortcut for the case where the boundary is only a thread, not a process.
+
+(defn current-trace-context
+  "Capture this thread's current W3C trace context as a map of header name to
+   header value, e.g. {\"traceparent\" \"00-<trace>-<span>-01\"}, which is safe
+   to put on a queue item, in EDN/JSON on the wire, or in any other carrier that
+   holds strings.  A JSON round trip that keywordizes the names is fine:
+   extract-trace-context reads either.
+
+   Returns nil when no valid span is current -- there is nothing to propagate
+   then, and nil lets a caller tell 'no trace' from 'a trace' rather than
+   propagating an all-zero id.  Also returns nil when the registered propagator
+   injects nothing (the noop OpenTelemetry, i.e. telemetry not configured)."
+  []
+  (let [^OpenTelemetry ot (get-open-telemetry)]
+    (when (.isValid (.getSpanContext ((interface-static-call Span/current))))
+      (let [^TextMapPropagator propagator (.getTextMapPropagator (.getPropagators ot))
+            carrier (atom {})]
+        (.inject propagator ((interface-static-call Context/current)) carrier
+                 (reify TextMapSetter
+                   (set [_ m key value]
+                     (swap! m assoc key value))))
+        (not-empty @carrier)))))
+
+(defn ^Context extract-trace-context
+  "Extract the W3C trace headers in `headers` -- the map current-trace-context
+   returns, or any map of header name to header value -- into an
+   io.opentelemetry.context.Context.
+
+   Header names may be strings or keywords.  current-trace-context produces
+   strings, but a map that has been through JSON on the way here usually comes
+   back keywordized (cheshire/parse-string with keywords? true, and every
+   Clojure JSON reader that defaults that way), and losing the trace to that
+   would be silent.
+
+   The extraction is layered on the context that is current on this thread, so
+   what comes back is that context plus whatever the headers add.  Returns nil
+   when the result holds no valid span -- headers is empty, or carries no usable
+   trace and nothing was current -- so a caller can skip making a context
+   current instead of making an invalid one current.  When a valid span IS
+   already current and the headers add nothing, the current context comes back,
+   and making it current again is a no-op."
+  [headers]
+  (when (seq headers)
+    (let [^OpenTelemetry ot (get-open-telemetry)
+          ^TextMapPropagator propagator (.getTextMapPropagator (.getPropagators ot))
+          ^Context context (.extract propagator ((interface-static-call Context/current))
+                                     headers
+                                     (reify TextMapGetter
+                                       (get [_ carrier key]
+                                         (or (clojure.core/get carrier key)
+                                             (clojure.core/get carrier (keyword key))))
+                                       (keys [_ carrier]
+                                         (map name (clojure.core/keys carrier)))))
+          ^Span span ((interface-static-call Span/fromContext io.opentelemetry.context.Context)
+                      context)]
+      (when (.isValid (.getSpanContext span))
+        context))))
+
+(defmacro with-trace-context
+  "Execute body with the trace context in `headers` current on this thread.
+
+   This is the receiving half of current-trace-context: use it on the thread
+   that picks work up -- a queue worker, an executor task, an item restored from
+   another process -- so the spans it starts join the trace that planned the
+   work instead of rooting a new one.  The Scope is always closed, so the
+   thread's previous context is current again after the body.
+
+   Header names may be strings or keywords, so headers that have been through
+   JSON and come back keywordized still work.
+
+   With nil or empty headers, or headers carrying no valid span context, the
+   body runs unchanged under whatever context the thread already had."
+  [headers & body]
+  `(let [f# (fn [] ~@body)]
+     (if-let [^Context context# (extract-trace-context ~headers)]
+       (with-open [^Scope scope# (.makeCurrent context#)]
+         (f#))
+       (f#))))
+
+(defn wrap-with-current-context
+  "Return a fn that runs f under the io.opentelemetry.context.Context that is
+   current on THIS thread at the moment wrap-with-current-context is called.
+
+   This is what io.opentelemetry.context.Context's own wrap does for a Runnable
+   or a Callable, done here so the result is still a Clojure fn: it takes the
+   arguments f takes, returns what f returns, and can be handed straight to an
+   executor.  Use it when the context is being carried within one process (a
+   future, an ExecutorService task); use current-trace-context /
+   with-trace-context when it has to survive serialization.
+
+   The Scope is closed after each call, so the borrowed context does not leak
+   onto the pool thread that ran it."
+  [f]
+  (let [^Context context ((interface-static-call Context/current))]
+    (fn [& args]
+      (with-open [^Scope scope (.makeCurrent context)]
+        (apply f args)))))
 
 (defn clj-http-wrap-telemetry-span
   [client]
@@ -269,6 +367,42 @@
   ([^Span span ^Throwable e escaped?]
    (let [attr-fn (interface-static-call Attributes/of AttributeKey Object)]
      (.recordException span e (attr-fn (get-exception-escaped) escaped?)))))
+
+(defmacro with-span
+  "Execute body inside an OpenTelemetry span named id.
+
+   The span joins the trace that is already running on this thread: it is a
+   child of the current span when that span's context is valid, and a root span
+   when it is not.  It is made current for the dynamic extent of body through a
+   Scope that is always closed, so whatever was current before -- the parent
+   span, or no valid span at all -- is current again on the way out.  Leaving
+   that Scope open would leave the ENDED span current on the thread, and every
+   later log line on it would carry a dead span id.
+
+   clj-http's telemetry middleware is installed for body, so any clj-http call
+   made on this thread inside the span injects traceparent and the service it
+   calls continues the same trace.
+
+   An exception thrown by body is recorded on the span, marked as escaped, and
+   rethrown.  The span is always ended.
+
+   Note that OpenTelemetry's current context is a thread-local: body running on
+   a thread this macro did not enter (a future, an executor task) does not see
+   the span.  Carry it with wrap-with-current-context, or with
+   current-trace-context / with-trace-context across a process boundary."
+  [id & body]
+  `(let [^Span parent# ((interface-static-call Span/current))
+         ^Span span# (if (.isValid (.getSpanContext parent#))
+                       (tracing/create-span (get-tracer) ~id parent#)
+                       (tracing/create-span (get-tracer) ~id))]
+     (try
+       (with-open [^Scope scope# (.makeCurrent span#)]
+         (clj-http-with-telemetry-span-middleware
+          ~@body))
+       (catch Throwable t#
+         (when span# (record-exception span# t# true))
+         (throw t#))
+       (finally (tracing/end-span span#)))))
 
 (defn ring-wrap-telemetry-span
   "Ring handler that creates a span for the dynamic extent of the wrapped
@@ -367,12 +501,3 @@
     `(with-merged-config
        delta-config
        ~@body)))
-
-(defmacro with-span
-  [id & body]
-  `(let [^Span span# (tracing/create-span (tracing/get-tracer (get-open-telemetry)) ~id)]  
-    (try 
-      (.makeCurrent span#)
-      ~@body
-      (finally
-        (.end span#)))))
