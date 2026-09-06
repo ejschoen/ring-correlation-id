@@ -11,10 +11,12 @@ All notable changes to this project will be documented in this file. This change
   (1.62.0).  Nothing outside the `:dev` profile changed, and the suite is green
   against the new pin — but green against a LOCAL install of the current
   clj-telemetry source, which shadows the published `0.5.0` snapshot in the
-  local repository.  That published snapshot is older than the source it was
-  built from and stays older until clj-telemetry is next deployed, so on a
-  machine without the local install this pin resolves the earlier artifact and
-  the run proves less than it does here.
+  local repository.  That published snapshot is `0.5.0-20260628.151112-1`
+  (28 June 2026), which predates the `create-span` fix on clj-telemetry's
+  `pipeline-performance-evidence` branch, and it stays the resolved artifact
+  until clj-telemetry is next deployed — so on a machine without the local
+  install this pin resolves that older build and the run proves less than it
+  does here.
 
 ### Fixed
 - `opentelemetry.middleware/with-span` was defined twice, and the definition that
