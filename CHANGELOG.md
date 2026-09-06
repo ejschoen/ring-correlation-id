@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
 ## [Unreleased]
+### Changed
+- The `:dev` profile now pins `clj-telemetry 0.5.0-SNAPSHOT` instead of
+  `0.3.1-SNAPSHOT`, so `lein test` exercises this library against the
+  clj-telemetry it is actually deployed beside.  The old pin resolved a build
+  from May 2025 carrying `opentelemetry-api 1.37.0`; the suite had therefore
+  never run against the current library or the current OpenTelemetry API
+  (1.62.0).  Nothing outside the `:dev` profile changed, and the suite is green
+  against the new pin.
+
 ### Fixed
 - `opentelemetry.middleware/with-span` was defined twice, and the definition that
   won made every span a root of a new trace, never closed the `Scope` it opened,
