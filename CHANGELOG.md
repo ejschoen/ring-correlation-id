@@ -9,7 +9,12 @@ All notable changes to this project will be documented in this file. This change
   from May 2025 carrying `opentelemetry-api 1.37.0`; the suite had therefore
   never run against the current library or the current OpenTelemetry API
   (1.62.0).  Nothing outside the `:dev` profile changed, and the suite is green
-  against the new pin.
+  against the new pin — but green against a LOCAL install of the current
+  clj-telemetry source, which shadows the published `0.5.0` snapshot in the
+  local repository.  That published snapshot is older than the source it was
+  built from and stays older until clj-telemetry is next deployed, so on a
+  machine without the local install this pin resolves the earlier artifact and
+  the run proves less than it does here.
 
 ### Fixed
 - `opentelemetry.middleware/with-span` was defined twice, and the definition that
