@@ -367,12 +367,3 @@
     `(with-merged-config
        delta-config
        ~@body)))
-
-(defmacro with-span
-  [id & body]
-  `(let [^Span span# (tracing/create-span (tracing/get-tracer (get-open-telemetry)) ~id)]  
-    (try 
-      (.makeCurrent span#)
-      ~@body
-      (finally
-        (.end span#)))))
